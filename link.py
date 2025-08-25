@@ -20,7 +20,7 @@ AUTH_RESPOND = "/auth/respond"
 AUTH_PROTECTED = "/auth/protected"
 
 MSG_SEND = "/api/message/send"
-MSG_GET = "/api/message/get/{messageid}"
+MSG_GET = "/api/message/get/" # {messageid}
 MSG_GET_ID = "/api/message/genid"
 
-GET_USER = "/api/user/{username}"
+GET_USER = "/api/user/" # {username}
