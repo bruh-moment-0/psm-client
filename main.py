@@ -105,6 +105,8 @@ def create_skey(username: str, password: str) -> str:
     return key
 
 def create_user(username: str, password: str) -> Dict[str, Any]:
+    if os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.skey.json")) and os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.json")):
+        raise RuntimeError(f"registration failed: user exists on the clients storage")
     key = keydecode(create_skey(username, password))
     publickey_kyber, privatekey_kyber = generate_keypair()
     privatekey_ed25519 = ed25519.Ed25519PrivateKey.generate()
@@ -131,10 +133,10 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
     }
     u = UserClassRegisterModel(username=username, publickey_kyber=data["publickey_kyber"], publickey_ed25519=data["publickey_ed25519"])
     resp = post(APIURL + AUTH_REGISTER, u.model_dump())
-    if resp["ok"] != True:
+    if not resp.get("ok"):
         raise RuntimeError(f"registration failed: {resp}")
     resp = get(APIURL + GET_USER + username)
-    if resp["ok"] != True:
+    if not resp.get("ok"):
         raise RuntimeError(f"registration failed: {resp}")
     data["ver"] = resp["data"]["ver"]
     data["usertype"] = resp["data"]["usertype"]
