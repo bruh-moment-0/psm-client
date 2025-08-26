@@ -3,7 +3,7 @@
 from typing import Any
 import datetime # i normally go with time but thats just not cool as this
 import base64
-import json # "in json we believe" - json cult /s
+import json # you guessed it, the best db ever
 import os
 
 VERSION = "CLI V1.1.1 INDEV (built 14:00 25/08/2025)"
