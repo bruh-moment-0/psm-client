@@ -6,7 +6,7 @@ import base64
 import json # you guessed it, the best db ever
 import os
 
-VERSION = "CLI V1.1.1 INDEV (built 14:00 25/08/2025)"
+VERSION = "CLI V1.1.2 INDEV (built 17:45 GMT+0 26/08/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 USERDIR = os.path.join(BASEDIR, "users")
 os.makedirs(USERDIR, exist_ok=True)
@@ -27,6 +27,9 @@ def byte2str(bytetext: bytes) -> str:
 
 def byte2b64(bytetext: bytes) -> str:
     return base64.b64encode(bytetext).decode()
+
+def b642byte(b64text: str) -> bytes:
+    return base64.b64decode(b64text.encode())
 
 def writejson(filepath: str, data: Any, indent: int = 4) -> None:
     with open(filepath, "w", encoding="utf-8") as f:

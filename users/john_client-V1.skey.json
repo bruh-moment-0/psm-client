@@ -1,12 +1,12 @@
 {
     "username": "john",
     "enc": {
-        "blob": "m3WmztVGViW10PeaX0pbI855AeoV33u/x5qxjxerep/eRI0RxsO3L+9Dtbs3ntkDCJhVSbiIrft2UuL4",
-        "salt": "ZwAlw0ROHk9wtorNofCOqg==",
-        "iv": "YQZtIcamsiW39wae"
+        "blob": "BwmolCzo2dzaEKAGjQ10HOdxcMku4YvItZe//UU5Pf2qlbyvNbpQ35h9DPHb9uQFOE/TMvswqChHPhwF",
+        "salt": "1/Py7Uzovwk+Z4J1rjkPzA==",
+        "nonce": "a/5QPvXl9ibA0c0k"
     },
     "app": "psm-client",
     "type": "skey",
-    "ver": "CLI V1.1.1 INDEV (built 14:00 25/08/2025)",
-    "stamp": 1756199543.9001684
+    "ver": "CLI V1.1.2 INDEV (built 17:45 GMT+0 26/08/2025)",
+    "stamp": 1756234364.2962146
 }
