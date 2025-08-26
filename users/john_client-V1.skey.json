@@ -1,0 +1,12 @@
+{
+    "username": "john",
+    "enc": {
+        "blob": "k1MPTxfxT7PYJ2jPthD3carBFuoiVnEogiCqETCT81ThMvIB/b+e4x4onuh8HXAA/sFouKvweHm2dfGR",
+        "salt": "6A14RgDIqHWWdXq0Weh2KA==",
+        "iv": "QRvb4miJNWGas6D4"
+    },
+    "app": "psm-client",
+    "type": "skey",
+    "ver": "CLI V1.1.1 INDEV (built 14:00 25/08/2025)",
+    "stamp": 1756198957.1458862
+}

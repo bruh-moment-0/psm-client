@@ -155,4 +155,4 @@ def load_user(username: str) -> Dict[str, Any]:
     return data
 """
 
-create_skey("john", "super-secret-password!")
+print(create_user("john", "super-secret-password!"))

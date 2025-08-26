@@ -9,6 +9,7 @@ import os
 VERSION = "CLI V1.1.1 INDEV (built 14:00 25/08/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 USERDIR = os.path.join(BASEDIR, "users")
+os.makedirs(USERDIR, exist_ok=True)
 
 def b64encodeUrlSafe(x: bytes) -> str:
     return base64.urlsafe_b64encode(x).decode()
