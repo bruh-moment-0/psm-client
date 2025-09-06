@@ -6,11 +6,14 @@ from link import * # custom lib for link/url control
 from data import * # custom lib for file control
 
 from pqcrypto.kem.ml_kem_512 import generate_keypair, encrypt, decrypt # kyber
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.asymmetric import ed25519 # ed25519
 from cryptography.hazmat.primitives import serialization # ed25519 shit
 from argon2.low_level import hash_secret_raw, Type # argon2id for AES256GCM
 from Crypto.Random import get_random_bytes # salt/nonce for AES256GCM
-from typing import Tuple, Dict, Any, Union
+from typing import Tuple, Dict, Any, Union, Optional
 from pydantic import BaseModel
 from Crypto.Cipher import AES # AES256GCM
 import requests # we gonna use this ALOT
@@ -22,12 +25,32 @@ SALT_LENGTH = 16
 NONCE_LENGTH = 12
 KEY_LENGTH = 32
 KDF_ITERATIONS = 100_000
+TOKEN_BUFFER_TIME = 60  # get new token 60 seconds before expiration
 
 # === Schemas ===
 class UserClassRegisterModel(BaseModel):
     username: str
     publickey_kyber: str
     publickey_ed25519: str
+
+class MessageSendModel(BaseModel):
+    messageid: str
+    sender: str
+    reciever: str
+    sender_pk: str
+    reciever_pk: str
+    ciphertext: str
+    payload: str
+
+class MessageGetModel(BaseModel):
+    messageid: str
+    sendertoken: str
+
+class MessageIDGENModel(BaseModel):
+    sender: str
+    sendertoken: str
+    reciever: str
+    update: bool
 
 # === Cryptography ===
 def keygen(length_bytes: int = 32) -> str:
@@ -78,6 +101,52 @@ def decryptAESGCM(blob_b64: str, password: Union[str, bytes], salt_b64: str, non
     ct = blob[:-16]
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
     return cipher.decrypt_and_verify(ct, tag).decode("utf-8")
+
+# === Token Management ===
+def check_token_expiration(token: str) -> Optional[int]:
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        r = requests.get(APIURL + AUTH_PROTECTED, headers=headers)
+        if r.status_code == 200:
+            response = r.json()
+            return response.get("exp")
+        return None
+    except:
+        return None
+
+def is_token_expiring_soon(token: str) -> bool:
+    exp_time = check_token_expiration(token)
+    if exp_time is None:
+        return True
+    return time.time() + TOKEN_BUFFER_TIME >= exp_time
+
+def ensure_valid_token(user_data: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
+    if current_token and not is_token_expiring_soon(current_token):
+        return current_token
+    token_data = create_token(user_data)
+    return token_data["tokens"]["access_token"]
+
+def make_authenticated_request(method: str, url: str, user_data: Dict[str, Any], current_token: str = None, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
+    token = ensure_valid_token(user_data, current_token)
+    headers = kwargs.get('headers', {})
+    headers["Authorization"] = f"Bearer {token}"
+    kwargs['headers'] = headers
+    if method.upper() == 'GET':
+        r = requests.get(url, **kwargs)
+    elif method.upper() == 'POST':
+        r = requests.post(url, **kwargs)
+    else:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+    if r.status_code == 401 and current_token != token:
+        fresh_token_data = create_token(user_data)
+        fresh_token = fresh_token_data["tokens"]["access_token"]
+        headers["Authorization"] = f"Bearer {fresh_token}"
+        kwargs['headers'] = headers
+        if method.upper() == 'GET':
+            r = requests.get(url, **kwargs)
+        elif method.upper() == 'POST':
+            r = requests.post(url, **kwargs)
+    return r
 
 # === Helpers ===
 def get_challenge(username):
@@ -193,7 +262,7 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
 
 def create_token(userdata: Dict[str, Any]):
     cid, challenge = get_challenge(userdata["username"])
-    sig = respond_challenge(userdata, challenge)   # pass only the string
+    sig = respond_challenge(userdata, challenge) # pass only the string
     tokens = get_token(userdata["username"], cid, sig)
     r = requests.get(APIURL + AUTH_PROTECTED, headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
     data = {
@@ -202,18 +271,232 @@ def create_token(userdata: Dict[str, Any]):
     }
     return data
 
-try:
-    udc = create_user("john", "super-secret-password!")
-    print(udc)
-    print("\n"*5)
-except Exception as e:
-    print(f"error: {e}")
+# === Messaging Functions ===
+def _derive_symmetric_key(shared_secret_bytes: bytes, info: bytes = b"psm-session-key") -> bytes:
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32, # 256-bit key for ChaCha20-Poly1305
+        salt=None, # optional; None is fine, but i will supply a per-session salt in the payload or something idk
+        info=info,
+    )
+    return hkdf.derive(shared_secret_bytes)
 
-try:
-    udl = load_user("john", "super-secret-password!")
-    print(udl)
-    print("\n"*5)
-    tok = create_token(udl)
-    print(tok)
-except Exception as e:
-    print(f"error: {e}")
+# --- replace / ensure you have these helpers (once) ---
+def encapsulate_shared_secret(receiver_public_key_b64: str) -> Tuple[str, str]:
+    """
+    Sender side: takes receiver's public key (b64), returns (ciphertext_b64, shared_secret_b64)
+    ciphertext must be stored by the server alongside the message.
+    """
+    pk = b642byte(receiver_public_key_b64)
+    ct, ss = encrypt(pk)         # encrypt(pk) -> (ciphertext_bytes, shared_secret_bytes)
+    return byte2b64(ct), byte2b64(ss)
+
+def decapsulate_shared_secret(private_key_bytes: bytes, ciphertext_b64: str) -> str:
+    """
+    Receiver side: takes receiver's private key bytes and ciphertext (b64) -> returns shared_secret_b64
+    """
+    ct = b642byte(ciphertext_b64)
+    ss = decrypt(private_key_bytes, ct)   # decrypt(secret_key, ciphertext) -> shared_secret_bytes
+    return byte2b64(ss)
+
+
+def get_user_info(username: str, user_data: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    r = make_authenticated_request("GET", APIURL + GET_USER + username, user_data, token)
+    r.raise_for_status()
+    return r.json()
+
+def generate_message_id(sender: str, receiver: str, user_data: Dict[str, Any], token: str = None, update: bool = True) -> str: # pyright: ignore[reportArgumentType]
+    data = {
+        "sender": sender,
+        "reciever": receiver,
+        "update": update
+    }
+    r = make_authenticated_request("GET", APIURL + MSG_GET_ID, user_data, token, params=data)
+    r.raise_for_status()
+    response = r.json()
+    if not response.get("ok"):
+        raise RuntimeError(f"Failed to generate message ID: {response}")
+    return response["msgid"]
+
+def create_shared_secret(sender_private_key: bytes, receiver_public_key: str) -> str:
+    receiver_public_key_bytes = b642byte(receiver_public_key)
+    shared_secret = decrypt(sender_private_key, receiver_public_key_bytes)
+    return byte2b64(shared_secret)
+
+def encrypt_message_payload(message: str, shared_secret_b64: str) -> str:
+    shared_secret_bytes = b642byte(shared_secret_b64)
+    key = _derive_symmetric_key(shared_secret_bytes)
+    aead = ChaCha20Poly1305(key)
+    nonce = os.urandom(12)
+    ciphertext = aead.encrypt(nonce, message.encode("utf-8"), associated_data=None)
+    combined = nonce + ciphertext
+    return base64.b64encode(combined).decode("utf-8")
+
+def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) -> str:
+    shared_secret_bytes = b642byte(shared_secret_b64)
+    key = _derive_symmetric_key(shared_secret_bytes)
+    combined = base64.b64decode(encrypted_payload_b64)
+    nonce = combined[:12]
+    ciphertext = combined[12:]
+    aead = ChaCha20Poly1305(key)
+    plaintext = aead.decrypt(nonce, ciphertext, associated_data=None)
+    return plaintext.decode("utf-8")
+
+def send_message(sender_data: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    receiver_info = get_user_info(receiver_username, sender_data, token)
+    if not receiver_info.get("ok"):
+        raise RuntimeError(f"Failed to get receiver info: {receiver_info}")
+
+    receiver_public_key = receiver_info["data"]["publickey_kyber"]
+    message_id = generate_message_id(sender_data["username"], receiver_username, sender_data, token)
+
+    # CORRECT FLOW: encapsulate with receiver's public key => ciphertext + shared_secret
+    ciphertext_b64, shared_secret_b64 = encapsulate_shared_secret(receiver_public_key)
+
+    # encrypt payload with derived symmetric key (ChaCha20-Poly1305)
+    encrypted_payload = encrypt_message_payload(message, shared_secret_b64)
+
+    msg_data = {
+        "messageid": message_id,
+        "sender": sender_data["username"],
+        "sendertoken": token,
+        "reciever": receiver_username,
+        "sender_pk": sender_data["publickey_kyber_b64"],
+        "reciever_pk": receiver_public_key,
+        # "shared_secret": shared_secret_b64, <- REMOVE THIS LINE
+        "ciphertext": ciphertext_b64,
+        "payload": encrypted_payload
+    }
+
+    r = make_authenticated_request("POST", APIURL + MSG_SEND, sender_data, token, json=msg_data)
+    r.raise_for_status()
+    response = r.json()
+    if not response.get("ok"):
+        raise RuntimeError(f"Failed to send message: {response}")
+    return {
+        "message_id": message_id,
+        "status": "sent",
+        "timestamp": response.get("timestamp"),
+        "token_exp": response.get("tokenexp")
+    }
+
+
+# --- fixed get_message (receiver decapsulates using the stored ciphertext) ---
+def get_message(message_id: str, user_data: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    # request the message record (which must contain 'ciphertext' and 'payload')
+    params = {
+        "sendertoken": token
+    }
+    r = requests.get(APIURL + MSG_GET + message_id, params=params)
+
+    r.raise_for_status()
+    response = r.json()
+    if not response.get("ok"):
+        raise RuntimeError(f"Failed to get message: {response}")
+
+    m = response["message"]
+
+    # authorization checks
+    if m["reciever"] != user_data["username"]:
+        # only the receiver can decapsulate & decrypt
+        raise RuntimeError("Only the receiver can decrypt this message")
+
+    # get stored kyber ciphertext produced by sender at send time
+    if "ciphertext" not in m:
+        raise RuntimeError("Message record missing 'ciphertext' required for Kyber decapsulation")
+
+    ciphertext_b64 = m["ciphertext"]
+
+    # decapsulate -> derive shared secret
+    shared_secret_b64 = decapsulate_shared_secret(user_data["privatekey_kyber"], ciphertext_b64)
+
+    # decrypt payload with derived key
+    plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
+
+    return {
+        "message_id": m["messageid"],
+        "sender": m["sender"],
+        "receiver": m["reciever"],
+        "message": plaintext,
+        "timestamp": m.get("timestamp"),
+        "token_exp": response.get("tokenexp")
+    }
+
+
+def get_user_public_key(username: str) -> Optional[str]:
+    try:
+        r = requests.get(APIURL + GET_USER + username)
+        r.raise_for_status()
+        response = r.json()
+        if response.get("ok"):
+            return response["data"]["publickey_kyber"]
+        return None
+    except:
+        return None
+
+# === Testing ===
+if __name__ == "__main__":
+    # Test user creation and loading
+    try:
+        udc = create_user("john", "super-secret-password!")
+        print("User created successfully")
+        print(f"Username: {udc['username']}")
+        print(f"Public Key (Kyber): {udc['publickey_kyber_b64'][:50]}...")
+        print("\n"*2)
+    except Exception as e:
+        print(f"User creation error: {e}")
+    try:
+        udc = create_user("alice", "super-secret-password!")
+        print("User created successfully")
+        print(f"Username: {udc['username']}")
+        print(f"Public Key (Kyber): {udc['publickey_kyber_b64'][:50]}...")
+        print("\n"*2)
+    except Exception as e:
+        print(f"User creation error: {e}")
+
+    try:
+        udl = load_user("john", "super-secret-password!")
+        print("User loaded successfully")
+        print(f"Username: {udl['username']}")
+        print(f"User Type: {udl['usertype']}")
+        
+        # Test token creation
+        tok = create_token(udl)
+        print(f"Token created successfully")
+        print(f"Token expires at: {tok['exp']}")
+        print("\n"*2)
+        
+        # Test messaging workflow with automatic token management
+        print("Testing messaging workflow with automatic token management...")
+        try:
+            user_data = load_user("john", "super-secret-password!")
+            token_data = create_token(user_data)
+            token = token_data["tokens"]["access_token"]
+            print(f"Authenticated as: {user_data['username']}")
+            print(f"Initial token expires at: {token_data['exp']}")
+            receiver = "alice"
+            message = "Hello Alice! This is an encrypted message with automatic token management."
+            print(f"\nSending message to {receiver}...")
+            send_result = send_message(user_data, receiver, message, token)
+            print(f"Message sent! ID: {send_result['message_id']}")
+            print(f"Token expires at: {send_result['token_exp']}")
+            print(f"\nRetrieving message {send_result['message_id']}...")
+            alice_data = load_user("alice", "super-secret-password!")
+            alice_token_data = create_token(alice_data)
+            alice_token = alice_token_data["tokens"]["access_token"]
+            retrieved_message = get_message(send_result['message_id'], alice_data, alice_token)
+            print(f"Retrieved message: {retrieved_message['message']}")
+            print(f"From: {retrieved_message['sender']}")
+            print(f"Timestamp: {retrieved_message['timestamp']}")
+            print(f"\nChecking token expiration...")
+            exp_time = check_token_expiration(token)
+            if exp_time:
+                print(f"Token expires at: {exp_time}")
+                print(f"Will expire soon: {is_token_expiring_soon(token)}")
+            else:
+                print("Token is invalid")
+        except Exception as e:
+            print(f"Error in messaging workflow: {e}")
+        
+    except Exception as e:
+        print(f"User loading/messaging error: {e}")
