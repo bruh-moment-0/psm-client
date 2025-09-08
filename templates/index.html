@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>PSM CLIENT SERVER HOMEPAGE</h2>
+<h3>{{ version }}</h3>
+<form action="/login" method="get">
+  <button type="submit">login</button>
+</form>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>LOGIN</h2>
+<h3>{{ version }}</h3>
+<form action="/login-send" method="post">
+    <input name="username" placeholder="enter username">
+    <input name="password" type="password" placeholder="enter password">
+    <button type="submit">Login</button>
+</form>
+{% endblock %}

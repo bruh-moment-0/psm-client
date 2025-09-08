@@ -6,10 +6,14 @@ import base64
 import json # you guessed it, the best db ever
 import os
 
-VERSION = "CLI V1.1.2 INDEV (built 17:45 GMT+0 26/08/2025)"
+VERSION = "CLIENT V1.1.3 INDEV (built 17:45 GMT+0 26/08/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
+FILESDIR = os.path.join(BASEDIR, "files")
 USERDIR = os.path.join(BASEDIR, "users")
+MESSAGEDIR = os.path.join(BASEDIR, "messages")
+os.makedirs(FILESDIR, exist_ok=True)
 os.makedirs(USERDIR, exist_ok=True)
+os.makedirs(MESSAGEDIR, exist_ok=True)
 
 def b64encodeUrlSafe(x: bytes) -> str:
     return base64.urlsafe_b64encode(x).decode()

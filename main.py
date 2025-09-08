@@ -5,6 +5,11 @@
 from link import * # custom lib for link/url control
 from data import * # custom lib for file control
 
+from fastapi import FastAPI, Request, HTTPException, Form, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+
 from pqcrypto.kem.ml_kem_512 import generate_keypair, encrypt, decrypt # kyber
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
@@ -16,6 +21,7 @@ from Crypto.Random import get_random_bytes # salt/nonce for AES256GCM
 from typing import Tuple, Dict, Any, Union, Optional
 from pydantic import BaseModel
 from Crypto.Cipher import AES # AES256GCM
+import webbrowser
 import requests # we gonna use this ALOT
 import warnings
 import secrets # for 256 bit key gen
@@ -25,7 +31,14 @@ SALT_LENGTH = 16
 NONCE_LENGTH = 12
 KEY_LENGTH = 32
 KDF_ITERATIONS = 100_000
-TOKEN_BUFFER_TIME = 60  # get new token 60 seconds before expiration
+TOKEN_BUFFER_TIME = 60 # get new token 60 seconds before expiration
+BASEDIR = os.path.abspath(os.path.dirname(__file__))
+STATICDIR = os.path.join(BASEDIR, "static")
+TEMPLATESDIR = os.path.join(BASEDIR, "templates")
+
+app = FastAPI()
+app.mount("/static", StaticFiles(directory=STATICDIR), name="static")
+templates = Jinja2Templates(directory=TEMPLATESDIR)
 
 # === Schemas ===
 class UserClassRegisterModel(BaseModel):
@@ -132,21 +145,21 @@ def make_authenticated_request(method: str, url: str, user_data: Dict[str, Any],
     headers["Authorization"] = f"Bearer {token}"
     kwargs['headers'] = headers
     if method.upper() == 'GET':
-        r = requests.get(url, **kwargs)
+        response = requests.get(url, **kwargs)
     elif method.upper() == 'POST':
-        r = requests.post(url, **kwargs)
+        response = requests.post(url, **kwargs)
     else:
         raise ValueError(f"Unsupported HTTP method: {method}")
-    if r.status_code == 401 and current_token != token:
-        fresh_token_data = create_token(user_data)
-        fresh_token = fresh_token_data["tokens"]["access_token"]
+    if response.status_code == 401:
+        print("Token failed or expired. Forcing a new token and retrying once...")
+        fresh_token = ensure_valid_token(user_data, None) # pyright: ignore[reportArgumentType]
         headers["Authorization"] = f"Bearer {fresh_token}"
         kwargs['headers'] = headers
         if method.upper() == 'GET':
-            r = requests.get(url, **kwargs)
+            response = requests.get(url, **kwargs)
         elif method.upper() == 'POST':
-            r = requests.post(url, **kwargs)
-    return r
+            response = requests.post(url, **kwargs)
+    return response
 
 # === Helpers ===
 def get_challenge(username):
@@ -281,24 +294,15 @@ def _derive_symmetric_key(shared_secret_bytes: bytes, info: bytes = b"psm-sessio
     )
     return hkdf.derive(shared_secret_bytes)
 
-# --- replace / ensure you have these helpers (once) ---
 def encapsulate_shared_secret(receiver_public_key_b64: str) -> Tuple[str, str]:
-    """
-    Sender side: takes receiver's public key (b64), returns (ciphertext_b64, shared_secret_b64)
-    ciphertext must be stored by the server alongside the message.
-    """
     pk = b642byte(receiver_public_key_b64)
-    ct, ss = encrypt(pk)         # encrypt(pk) -> (ciphertext_bytes, shared_secret_bytes)
+    ct, ss = encrypt(pk)
     return byte2b64(ct), byte2b64(ss)
 
 def decapsulate_shared_secret(private_key_bytes: bytes, ciphertext_b64: str) -> str:
-    """
-    Receiver side: takes receiver's private key bytes and ciphertext (b64) -> returns shared_secret_b64
-    """
     ct = b642byte(ciphertext_b64)
-    ss = decrypt(private_key_bytes, ct)   # decrypt(secret_key, ciphertext) -> shared_secret_bytes
+    ss = decrypt(private_key_bytes, ct)
     return byte2b64(ss)
-
 
 def get_user_info(username: str, user_data: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     r = make_authenticated_request("GET", APIURL + GET_USER + username, user_data, token)
@@ -342,20 +346,14 @@ def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) 
     plaintext = aead.decrypt(nonce, ciphertext, associated_data=None)
     return plaintext.decode("utf-8")
 
-def send_message(sender_data: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+def send_message(sender_data: Dict[str, Any], receiver_username: str, payload: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     receiver_info = get_user_info(receiver_username, sender_data, token)
     if not receiver_info.get("ok"):
         raise RuntimeError(f"Failed to get receiver info: {receiver_info}")
-
     receiver_public_key = receiver_info["data"]["publickey_kyber"]
     message_id = generate_message_id(sender_data["username"], receiver_username, sender_data, token)
-
-    # CORRECT FLOW: encapsulate with receiver's public key => ciphertext + shared_secret
     ciphertext_b64, shared_secret_b64 = encapsulate_shared_secret(receiver_public_key)
-
-    # encrypt payload with derived symmetric key (ChaCha20-Poly1305)
-    encrypted_payload = encrypt_message_payload(message, shared_secret_b64)
-
+    encrypted_payload = encrypt_message_payload(payload, shared_secret_b64)
     msg_data = {
         "messageid": message_id,
         "sender": sender_data["username"],
@@ -363,11 +361,9 @@ def send_message(sender_data: Dict[str, Any], receiver_username: str, message: s
         "reciever": receiver_username,
         "sender_pk": sender_data["publickey_kyber_b64"],
         "reciever_pk": receiver_public_key,
-        # "shared_secret": shared_secret_b64, <- REMOVE THIS LINE
         "ciphertext": ciphertext_b64,
         "payload": encrypted_payload
     }
-
     r = make_authenticated_request("POST", APIURL + MSG_SEND, sender_data, token, json=msg_data)
     r.raise_for_status()
     response = r.json()
@@ -377,71 +373,93 @@ def send_message(sender_data: Dict[str, Any], receiver_username: str, message: s
         "message_id": message_id,
         "status": "sent",
         "timestamp": response.get("timestamp"),
-        "token_exp": response.get("tokenexp")
+        "token_exp": response.get("tokenexp"),
+        "sender": sender_data["username"],
+        "reciever": receiver_username,
+        "sender_pk": sender_data["publickey_kyber_b64"],
+        "reciever_pk": receiver_public_key,
+        "payload": payload
     }
 
+def send_message_persistent_storage(userdata: Dict[str, Any], sender_data: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    send_data = send_message(sender_data, receiver_username, message, token)
+    b64kyberprivate = byte2b64(userdata["privatekey_kyber"])
+    payload = encrypt_message_payload(send_data["payload"], b64kyberprivate) # this does feel cursed to do...
+    send_data["payload"] = payload
+    messagefp = os.path.join(MESSAGEDIR, f"{send_data['message_id']}-msg-V1-CLIENT.json")
+    writejson(messagefp, send_data)
+    return {
+        "message_id": send_data["message_id"],
+        "status": "sent",
+        "timestamp": send_data["timestamp"],
+        "token_exp": send_data["token_exp"],
+        "sender": sender_data["username"],
+        "reciever": receiver_username
+    }
 
-# --- fixed get_message (receiver decapsulates using the stored ciphertext) ---
 def get_message(message_id: str, user_data: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
-    # request the message record (which must contain 'ciphertext' and 'payload')
-    params = {
-        "sendertoken": token
-    }
+    params = {"sendertoken": token}
     r = requests.get(APIURL + MSG_GET + message_id, params=params)
-
     r.raise_for_status()
     response = r.json()
     if not response.get("ok"):
         raise RuntimeError(f"Failed to get message: {response}")
-
     m = response["message"]
-
-    # authorization checks
     if m["reciever"] != user_data["username"]:
-        # only the receiver can decapsulate & decrypt
-        raise RuntimeError("Only the receiver can decrypt this message")
+        # sender is trying to get this text, so we gonna use the existing one
+        messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
+        local_send_data = readjson(messagefp)
+        b64kyberprivate = byte2b64(user_data["privatekey_kyber"])
+        plaintext = decrypt_message_payload(local_send_data["payload"], b64kyberprivate)
+        return {
+            "message_id": local_send_data["message_id"],
+            "sender": local_send_data["sender"],
+            "receiver": local_send_data["reciever"],
+            "message": plaintext,
+            "timestamp": local_send_data["timestamp"],
+            "token_exp": local_send_data["token_exp"]
+        }
+    else:
+        ciphertext_b64 = m["ciphertext"]
+        shared_secret_b64 = decapsulate_shared_secret(user_data["privatekey_kyber"], ciphertext_b64)
+        plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
+        return {
+            "message_id": m["messageid"],
+            "sender": m["sender"],
+            "receiver": m["reciever"],
+            "message": plaintext,
+            "timestamp": m.get("timestamp"),
+            "token_exp": response.get("tokenexp")
+        }
 
-    # get stored kyber ciphertext produced by sender at send time
-    if "ciphertext" not in m:
-        raise RuntimeError("Message record missing 'ciphertext' required for Kyber decapsulation")
+# === client web server ===
+@app.get("/", response_class=HTMLResponse)
+async def homeUI(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "version": VERSION})
 
-    ciphertext_b64 = m["ciphertext"]
+@app.get("/login", response_class=HTMLResponse)
+async def loginUI(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
 
-    # decapsulate -> derive shared secret
-    shared_secret_b64 = decapsulate_shared_secret(user_data["privatekey_kyber"], ciphertext_b64)
+@app.post("/login-send")
+async def login_send(username: str = Form(...), password: str = Form(...)):
+    # for now just gonna return the info
+    return {"username": username, "password": password}
 
-    # decrypt payload with derived key
-    plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
+if __name__ == "__main__":
+    import uvicorn
+    port = 8080
+    uvicorn.run(app, host="0.0.0.0", port=port)
+    webbrowser.open_new(f"http://localhost:{port}")
 
-    return {
-        "message_id": m["messageid"],
-        "sender": m["sender"],
-        "receiver": m["reciever"],
-        "message": plaintext,
-        "timestamp": m.get("timestamp"),
-        "token_exp": response.get("tokenexp")
-    }
-
-
-def get_user_public_key(username: str) -> Optional[str]:
-    try:
-        r = requests.get(APIURL + GET_USER + username)
-        r.raise_for_status()
-        response = r.json()
-        if response.get("ok"):
-            return response["data"]["publickey_kyber"]
-        return None
-    except:
-        return None
-
-# === Testing ===
+# === testing ===
 if __name__ == "__main__":
     # Test user creation and loading
     try:
         udc = create_user("john", "super-secret-password!")
         print("User created successfully")
         print(f"Username: {udc['username']}")
-        print(f"Public Key (Kyber): {udc['publickey_kyber_b64'][:50]}...")
+        print(f"Public Key (Kyber): {udc['publickey_kyber_b64']}...")
         print("\n"*2)
     except Exception as e:
         print(f"User creation error: {e}")
