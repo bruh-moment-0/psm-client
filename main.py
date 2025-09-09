@@ -5,23 +5,25 @@
 from link import * # custom lib for link/url control
 from data import * # custom lib for file control
 
-from fastapi import FastAPI, Request, HTTPException, Form, Depends
+from fastapi import FastAPI, Request, HTTPException, Form, Depends, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
-from pqcrypto.kem.ml_kem_512 import generate_keypair, encrypt, decrypt # kyber
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from pqcrypto.kem.ml_kem_512 import generate_keypair, encrypt, decrypt # kyber
 from cryptography.hazmat.primitives.asymmetric import ed25519 # ed25519
 from cryptography.hazmat.primitives import serialization # ed25519 shit
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from typing import Tuple, Dict, Any, Union, Optional # making pylance happy i guess
 from argon2.low_level import hash_secret_raw, Type # argon2id for AES256GCM
+from cryptography.hazmat.primitives import hashes
 from Crypto.Random import get_random_bytes # salt/nonce for AES256GCM
-from typing import Tuple, Dict, Any, Union, Optional
+
 from pydantic import BaseModel
+from urllib.parse import quote # to make text url friendly
 from Crypto.Cipher import AES # AES256GCM
-import webbrowser
+import webbrowser # to open the webbrowser
 import requests # we gonna use this ALOT
 import warnings
 import secrets # for 256 bit key gen
@@ -36,6 +38,8 @@ BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STATICDIR = os.path.join(BASEDIR, "static")
 TEMPLATESDIR = os.path.join(BASEDIR, "templates")
 
+userdat = None
+tok = None
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATICDIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATESDIR)
@@ -209,7 +213,10 @@ def load_skey(username: str, password: str) -> str:
         warnings.warn("skey load warn: app version mismatch", RuntimeWarning)
     if time.time() - data["stamp"] > 60 * 60 * 24 * 14:
         warnings.warn("skey load warn: skey is older than 14 days", RuntimeWarning)
-    return decryptAESGCM(data["enc"]["blob"], password, data["enc"]["salt"], data["enc"]["nonce"])
+    try:
+        return decryptAESGCM(data["enc"]["blob"], password, data["enc"]["salt"], data["enc"]["nonce"])
+    except Exception as e:
+        raise RuntimeError(f"decryption failed: {e}, password might be wrong or file might be corrupted")
 
 def create_user(username: str, password: str) -> Dict[str, Any]:
     if os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.skey.json")) or os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.json")):
@@ -255,7 +262,7 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
 
 def load_user(username: str, password: str) -> Dict[str, Any]:
     if not os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.skey.json")) or not os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.json")):
-        raise RuntimeError(f"loading failed: clients files dont exist on the clients storage")
+        raise RuntimeError("loading failed: clients files dont exist on the clients storage")
     key = load_skey(username, password)
     data = readjson(os.path.join(USERDIR, f"{username}_client-V1.json"))
     if data["ver"] != VERSION:
@@ -433,6 +440,16 @@ def get_message(message_id: str, user_data: Dict[str, Any], token: str = None) -
         }
 
 # === client web server ===
+@app.exception_handler(RuntimeError)
+async def runtime_error_exception_handler(request: Request, exc: RuntimeError):
+    error_message = quote(str(exc))
+    referer = request.headers.get("referer", "/")
+    if "?" in referer:
+        redirect_url = f"{referer}&error={error_message}"
+    else:
+        redirect_url = f"{referer}?error={error_message}"
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+
 @app.get("/", response_class=HTMLResponse)
 async def homeUI(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "version": VERSION})
@@ -443,15 +460,37 @@ async def loginUI(request: Request):
 
 @app.post("/login-send")
 async def login_send(username: str = Form(...), password: str = Form(...)):
-    # for now just gonna return the info
-    return {"username": username, "password": password}
+    global userdat
+    userdat = load_user(username, password)
+    return RedirectResponse(url="/main", status_code=302)
+
+@app.get("/register", response_class=HTMLResponse)
+async def registerUI(request: Request):
+    return templates.TemplateResponse("register.html", {"request": request})
+
+@app.post("/register-send")
+async def register_send(username: str = Form(...), password: str = Form(...)):
+    global userdat
+    userdat = create_user(username, password)
+    return RedirectResponse(url="/login", status_code=302)
+
+@app.get("/main", response_class=HTMLResponse)
+async def mainUI(request: Request):
+    global userdat
+    global tok
+    if not userdat:
+        return RedirectResponse(url="/login", status_code=302)
+    if not tok:
+        tok = create_token(userdat)
+    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["username"]})
 
 if __name__ == "__main__":
     import uvicorn
     port = 8080
-    uvicorn.run(app, host="0.0.0.0", port=port)
     webbrowser.open_new(f"http://localhost:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
+"""
 # === testing ===
 if __name__ == "__main__":
     # Test user creation and loading
@@ -518,3 +557,4 @@ if __name__ == "__main__":
         
     except Exception as e:
         print(f"User loading/messaging error: {e}")
+"""

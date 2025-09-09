@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PSM CLIENT SERVER</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', path='favicon.ico') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header>
+    <a href="/">home</a><br><a href="https://github.com/bruh-moment-0/psm-client">github repo</a>
+  </header>
+  <main>
+    {% if request.query_params.error %}
+      <div style="color: red; border: 1px solid red; padding: 10px; margin-bottom: 15px; border-radius: 5px;">
+          <strong>Error:</strong> {{ request.query_params.error }}
+      </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

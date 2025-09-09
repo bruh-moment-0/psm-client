@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>LOGIN</h2>
+<h2>REGISTER</h2>
 <h3>{{ version }}</h3>
-<form action="/login-send" method="post">
+<form action="/register-send" method="post">
     <input name="username" placeholder="enter username">
     <input name="password" type="password" placeholder="enter password">
     <button type="submit">Login</button>
+</form>
+<form action="/login" method="get">
+  <p>or login an account...</p>
+  <button type="submit">login an account</button>
 </form>
 {% endblock %}
