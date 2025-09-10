@@ -3,18 +3,50 @@
 <h2>PSM CLIENT SERVER MAIN MESSAGING PAGE</h2>
 <h3>{{ version }}</h3>
 <h4>logged in as {{ username }}</h4>
+
+<textarea id="scrolledText" readonly></textarea>
+<input type="text" id="inputBox" placeholder="Enter text...">
+    <button onclick="sendAppend()">Append</button>
+    <button onclick="sendRemove()">Remove Last</button>
+    <button onclick="sendClear()">Clear</button>
+
 <form action="/sendmessage" method="post">
-  <input name="username" placeholder="enter username">
-  <input name="message" placeholder="enter message">
-  <button type="submit">send</button>
+    <input name="username" placeholder="enter username">
+    <input name="message" placeholder="enter message">
+    <button type="submit">send</button>
 </form>
+
 <form action="/getmessageid" method="post">
-  <input name="username" placeholder="enter username">
-  <input name="messageint" placeholder="enter message int">
-  <button type="submit">get</button>
+    <input name="username" placeholder="enter username">
+    <input name="messageint" placeholder="enter message int">
+    <button type="submit">get</button>
 </form>
+
 <form action="/getmessage" method="post">
-  <input name="messageid" placeholder="enter messageid">
-  <button type="submit">get</button>
+    <input name="messageid" placeholder="enter messageid">
+    <button type="submit">get</button>
 </form>
+
+<script>
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const textArea = document.getElementById("scrolledText");
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        textArea.value = data.lines.join("\n");
+        textArea.scrollTop = textArea.scrollHeight;
+    };
+    function sendAppend() {
+        const val = document.getElementById("inputBox").value;
+        if (val.trim() !== "") {
+            ws.send(JSON.stringify({action: "append", text: val}));
+            document.getElementById("inputBox").value = "";
+        }
+    }
+    function sendRemove() {
+        ws.send(JSON.stringify({action: "remove_last"}));
+    }
+    function sendClear() {
+        ws.send(JSON.stringify({action: "clear"}));
+    }
+</script>
 {% endblock %}

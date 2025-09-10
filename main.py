@@ -5,7 +5,7 @@
 from link import * # custom lib for link/url control
 from data import * # custom lib for file control
 
-from fastapi import FastAPI, Request, HTTPException, Form, Depends, status
+from fastapi import FastAPI, Request, HTTPException, Form, Depends, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +37,12 @@ TOKEN_BUFFER_TIME = 60 # get new token 60 seconds before expiration
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STATICDIR = os.path.join(BASEDIR, "static")
 TEMPLATESDIR = os.path.join(BASEDIR, "templates")
+
+# i have no idea what these do but they make shit work so yes yes
+# shared buffer
+scrolled_text_data: list[str] = []
+# connected clients
+connections: list[WebSocket] = []
 
 userdat = None
 tok = None
@@ -483,6 +489,30 @@ async def mainUI(request: Request):
     if not tok:
         tok = create_token(userdat)
     return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["username"]})
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    connections.append(ws)
+    # send initial contents
+    await ws.send_json({"lines": scrolled_text_data})
+    try:
+        while True:
+            msg = await ws.receive_json()
+            action = msg.get("action")
+            text = msg.get("text", "")
+            if action == "append":
+                scrolled_text_data.append(text)
+            elif action == "clear":
+                scrolled_text_data.clear()
+            elif action == "remove_last":
+                if scrolled_text_data:
+                    scrolled_text_data.pop()
+            # broadcast to all
+            for conn in connections:
+                await conn.send_json({"lines": scrolled_text_data})
+    except WebSocketDisconnect:
+        connections.remove(ws)
 
 if __name__ == "__main__":
     import uvicorn
