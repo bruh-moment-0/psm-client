@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WebSocket ScrolledText</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h2>Scrolled Text (Live)</h2>
+    <textarea id="scrolledText" readonly></textarea>
+
+    <input type="text" id="inputBox" placeholder="Enter text...">
+    <button onclick="sendAppend()">Append</button>
+    <button onclick="sendRemove()">Remove Last</button>
+    <button onclick="sendClear()">Clear</button>
+
+    <script>
+        const ws = new WebSocket(`ws://${location.host}/ws`);
+        const textArea = document.getElementById("scrolledText");
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            textArea.value = data.lines.join("\n");
+            textArea.scrollTop = textArea.scrollHeight;
+        };
+
+        function sendAppend() {
+            const val = document.getElementById("inputBox").value;
+            if (val.trim() !== "") {
+                ws.send(JSON.stringify({action: "append", text: val}));
+                document.getElementById("inputBox").value = "";
+            }
+        }
+
+        function sendRemove() {
+            ws.send(JSON.stringify({action: "remove_last"}));
+        }
+
+        function sendClear() {
+            ws.send(JSON.stringify({action: "clear"}));
+        }
+    </script>
+</body>
+</html>

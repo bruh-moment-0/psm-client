@@ -5,8 +5,19 @@ import requests
 DEMOMODE = True
 
 _URLBASE = "https://raw.githubusercontent.com/bruh-moment-0/psm-url/refs/heads/main/url.txt"
-resp = requests.get(_URLBASE)
-APIURL = resp.text.strip() if not DEMOMODE else "http://127.0.0.1:8000/"
+
+if not DEMOMODE:
+    try:
+        resp = requests.get(_URLBASE)
+    except:
+        import unsafeadapter # worst adapter ever
+        # but fixes CA problems and other unsafe connection caused bugs
+        # best way to fight something unsafe is to do something more unsafe i guess
+        resp = requests.get(_URLBASE)
+    APIURL = resp.text.strip()
+
+else:
+    APIURL = "http://127.0.0.1:8000/"
 
 def apiTunnelAlive():
     try:
@@ -18,10 +29,10 @@ def apiTunnelAlive():
     except requests.exceptions.RequestException as e:
         return False
 
-AUTH_REGISTER = "/auth/register" # used
-AUTH_CHALLENGE = "/auth/challenge" # used
-AUTH_RESPOND = "/auth/respond" # used
-AUTH_PROTECTED = "/auth/protected" # used
+AUTH_REGISTER = "/auth/register"
+AUTH_CHALLENGE = "/auth/challenge"
+AUTH_RESPOND = "/auth/respond"
+AUTH_PROTECTED = "/auth/protected"
 
 MSG_SEND = "/api/message/send"
 MSG_GET = "/api/message/get/" # {messageid}
