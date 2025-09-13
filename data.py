@@ -6,7 +6,7 @@ import base64
 import json # you guessed it, the best db ever
 import os
 
-VERSION = "CLIENT V1.1.6 INDEV (built 20:30 GMT+0 10/09/2025)"
+VERSION = "CLIENT V1.1.7 INDEV (built 20:45 GMT+0 13/09/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STORAGEDIR = os.path.join(BASEDIR, "storage")
 FILESDIR = os.path.join(STORAGEDIR, "files")

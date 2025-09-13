@@ -5,27 +5,10 @@
 <h4>logged in as {{ username }}</h4>
 
 <textarea id="scrolledText" readonly></textarea>
-<input type="text" id="inputBox" placeholder="Enter text...">
-    <button onclick="sendAppend()">Append</button>
-    <button onclick="sendRemove()">Remove Last</button>
-    <button onclick="sendClear()">Clear</button>
-
-<form action="/sendmessage" method="post">
-    <input name="username" placeholder="enter username">
-    <input name="message" placeholder="enter message">
-    <button type="submit">send</button>
-</form>
-
-<form action="/getmessageid" method="post">
-    <input name="username" placeholder="enter username">
-    <input name="messageint" placeholder="enter message int">
-    <button type="submit">get</button>
-</form>
-
-<form action="/getmessage" method="post">
-    <input name="messageid" placeholder="enter messageid">
-    <button type="submit">get</button>
-</form>
+    <input type="text" id="msgInputBox" placeholder="enter message...">
+    <input type="text" id="userInputBox" placeholder="enter username...">
+    <button onclick="sendMessage()">Send</button>
+    <button onclick="getMessage()">Refresh</button>
 
 <script>
     const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -42,11 +25,16 @@
             document.getElementById("inputBox").value = "";
         }
     }
-    function sendRemove() {
-        ws.send(JSON.stringify({action: "remove_last"}));
+    function sendMessage() {
+        const message = document.getElementById("msgInputBox").value;
+        const username = document.getElementById("userInputBox").value;
+        if (val.trim() !== "") {
+            ws.send(JSON.stringify({action: "append", text: val}));
+            document.getElementById("inputBox").value = "";
+        }
     }
-    function sendClear() {
-        ws.send(JSON.stringify({action: "clear"}));
+    function getMessage() {
+        ws.send(JSON.stringify({action: "getmsg"}));
     }
 </script>
 {% endblock %}

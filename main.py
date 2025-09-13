@@ -29,6 +29,8 @@ import warnings
 import secrets # for 256 bit key gen
 import time
 
+# importing the whole pypi ahh
+
 SALT_LENGTH = 16
 NONCE_LENGTH = 12
 KEY_LENGTH = 32
@@ -39,10 +41,8 @@ STATICDIR = os.path.join(BASEDIR, "static")
 TEMPLATESDIR = os.path.join(BASEDIR, "templates")
 
 # i have no idea what these do but they make shit work so yes yes
-# shared buffer
-scrolled_text_data: list[str] = []
-# connected clients
-connections: list[WebSocket] = []
+scrolled_text_data: list[str] = [] # shared buffer
+connections: list[WebSocket] = [] # connected clients
 
 userdat = None
 tok = None
@@ -171,7 +171,6 @@ def make_authenticated_request(method: str, url: str, user_data: Dict[str, Any],
             response = requests.post(url, **kwargs)
     return response
 
-# === Helpers ===
 def get_challenge(username):
     r = requests.post(APIURL + AUTH_CHALLENGE, json={"username": username})
     r.raise_for_status()
@@ -191,6 +190,18 @@ def get_token(username, challenge_id, signature):
     r.raise_for_status()
     return r.json()
 
+def create_token(userdata: Dict[str, Any]):
+    cid, challenge = get_challenge(userdata["username"])
+    sig = respond_challenge(userdata, challenge) # pass only the string
+    tokens = get_token(userdata["username"], cid, sig)
+    r = requests.get(APIURL + AUTH_PROTECTED, headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
+    data = {
+        "tokens": tokens,
+        "exp": r["exp"]
+    }
+    return data
+
+# === Helpers ===
 def create_skey(username: str, password: str) -> str:
     key = keygen()
     blob, salt, nonce = encryptAESGCM(key, password)
@@ -286,23 +297,16 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
     data["publickey_kyber"] = b642byte(publickey_kyber)
     return data
 
-def create_token(userdata: Dict[str, Any]):
-    cid, challenge = get_challenge(userdata["username"])
-    sig = respond_challenge(userdata, challenge) # pass only the string
-    tokens = get_token(userdata["username"], cid, sig)
-    r = requests.get(APIURL + AUTH_PROTECTED, headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
-    data = {
-        "tokens": tokens,
-        "exp": r["exp"]
-    }
-    return data
-
 # === Messaging Functions ===
+# > creates "Cryptography" header
+# > puts messaging encryption uhnder a diffrent header
+# shit ass programming time
 def _derive_symmetric_key(shared_secret_bytes: bytes, info: bytes = b"psm-session-key") -> bytes:
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32, # 256-bit key for ChaCha20-Poly1305
         salt=None, # optional; None is fine, but i will supply a per-session salt in the payload or something idk
+        # this shit lowkey sucks ass but i have gotten so far to give up now
         info=info,
     )
     return hkdf.derive(shared_secret_bytes)
@@ -394,6 +398,7 @@ def send_message(sender_data: Dict[str, Any], receiver_username: str, payload: s
         "payload": payload
     }
 
+# shit ass function name, how long even this shit is??
 def send_message_persistent_storage(userdata: Dict[str, Any], sender_data: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     send_data = send_message(sender_data, receiver_username, message, token)
     b64kyberprivate = byte2b64(userdata["privatekey_kyber"])
@@ -445,7 +450,7 @@ def get_message(message_id: str, user_data: Dict[str, Any], token: str = None) -
             "token_exp": response.get("tokenexp")
         }
 
-# === client web server ===
+# === client web server shit ===
 @app.exception_handler(RuntimeError)
 async def runtime_error_exception_handler(request: Request, exc: RuntimeError):
     error_message = quote(str(exc))
@@ -498,9 +503,9 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.send_json({"lines": scrolled_text_data})
     try:
         while True:
-            msg = await ws.receive_json()
-            action = msg.get("action")
-            text = msg.get("text", "")
+            jsondata = await ws.receive_json()
+            action = jsondata.get("action")
+            text = jsondata.get("text", "")
             if action == "append":
                 scrolled_text_data.append(text)
             elif action == "clear":
