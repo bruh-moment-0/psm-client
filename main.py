@@ -10,14 +10,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
-from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305 # main encryption
 from pqcrypto.kem.ml_kem_512 import generate_keypair, encrypt, decrypt # kyber
 from cryptography.hazmat.primitives.asymmetric import ed25519 # ed25519
 from cryptography.hazmat.primitives import serialization # ed25519 shit
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF # to do something i forgot right now
 from typing import Tuple, Dict, Any, Union, Optional # making pylance happy i guess
 from argon2.low_level import hash_secret_raw, Type # argon2id for AES256GCM
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes # hkdf stuff
 from Crypto.Random import get_random_bytes # salt/nonce for AES256GCM
 
 from pydantic import BaseModel
@@ -29,7 +29,7 @@ import warnings
 import secrets # for 256 bit key gen
 import time
 
-# importing the whole pypi ahh
+# importing the whole pypi ass
 
 SALT_LENGTH = 16
 NONCE_LENGTH = 12
