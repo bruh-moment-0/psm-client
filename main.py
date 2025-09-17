@@ -50,6 +50,13 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATICDIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATESDIR)
 
+# === Functions ===
+def messageformatter(username: str, message: str) -> str:
+    now = datetime.datetime.now()
+    formattedtime = now.strftime("%d/%m/%Y %H:%M:%S")
+    formatted = f"[{formattedtime}] {username} > {message}"
+    return formatted
+
 # === Schemas ===
 class UserClassRegisterModel(BaseModel):
     username: str
@@ -59,11 +66,12 @@ class UserClassRegisterModel(BaseModel):
 class MessageSendModel(BaseModel):
     messageid: str
     sender: str
-    reciever: str
+    receiver: str
     sender_pk: str
-    reciever_pk: str
+    receiver_pk: str
     ciphertext: str
     payload: str
+    sendertoken: str
 
 class MessageGetModel(BaseModel):
     messageid: str
@@ -72,7 +80,7 @@ class MessageGetModel(BaseModel):
 class MessageIDGENModel(BaseModel):
     sender: str
     sendertoken: str
-    reciever: str
+    receiver: str
     update: bool
 
 # === Cryptography ===
@@ -143,14 +151,14 @@ def is_token_expiring_soon(token: str) -> bool:
         return True
     return time.time() + TOKEN_BUFFER_TIME >= exp_time
 
-def ensure_valid_token(user_data: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
+def ensure_valid_token(userdata: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
     if current_token and not is_token_expiring_soon(current_token):
         return current_token
-    token_data = create_token(user_data)
+    token_data = create_token(userdata)
     return token_data["tokens"]["access_token"]
 
-def make_authenticated_request(method: str, url: str, user_data: Dict[str, Any], current_token: str = None, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
-    token = ensure_valid_token(user_data, current_token)
+def make_authenticated_request(method: str, url: str, userdata: Dict[str, Any], current_token: str = None, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
+    token = ensure_valid_token(userdata, current_token)
     headers = kwargs.get('headers', {})
     headers["Authorization"] = f"Bearer {token}"
     kwargs['headers'] = headers
@@ -162,7 +170,7 @@ def make_authenticated_request(method: str, url: str, user_data: Dict[str, Any],
         raise ValueError(f"Unsupported HTTP method: {method}")
     if response.status_code == 401:
         print("Token failed or expired. Forcing a new token and retrying once...")
-        fresh_token = ensure_valid_token(user_data, None) # pyright: ignore[reportArgumentType]
+        fresh_token = ensure_valid_token(userdata, None) # pyright: ignore[reportArgumentType]
         headers["Authorization"] = f"Bearer {fresh_token}"
         kwargs['headers'] = headers
         if method.upper() == 'GET':
@@ -321,18 +329,18 @@ def decapsulate_shared_secret(private_key_bytes: bytes, ciphertext_b64: str) -> 
     ss = decrypt(private_key_bytes, ct)
     return byte2b64(ss)
 
-def get_user_info(username: str, user_data: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
-    r = make_authenticated_request("GET", APIURL + GET_USER + username, user_data, token)
+def get_user_info(username: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    r = make_authenticated_request("GET", APIURL + GET_USER + username, userdata, token)
     r.raise_for_status()
     return r.json()
 
-def generate_message_id(sender: str, receiver: str, user_data: Dict[str, Any], token: str = None, update: bool = True) -> str: # pyright: ignore[reportArgumentType]
+def generate_message_id(sender: str, receiver: str, userdata: Dict[str, Any], token: str = None, update: bool = True) -> str: # pyright: ignore[reportArgumentType]
     data = {
         "sender": sender,
-        "reciever": receiver,
+        "receiver": receiver,
         "update": update
     }
-    r = make_authenticated_request("GET", APIURL + MSG_GET_ID, user_data, token, params=data)
+    r = make_authenticated_request("GET", APIURL + MSG_GET_ID, userdata, token, params=data)
     r.raise_for_status()
     response = r.json()
     if not response.get("ok"):
@@ -363,25 +371,25 @@ def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) 
     plaintext = aead.decrypt(nonce, ciphertext, associated_data=None)
     return plaintext.decode("utf-8")
 
-def send_message(sender_data: Dict[str, Any], receiver_username: str, payload: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
-    receiver_info = get_user_info(receiver_username, sender_data, token)
+def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    receiver_info = get_user_info(receiver_username, userdata, token)
     if not receiver_info.get("ok"):
         raise RuntimeError(f"Failed to get receiver info: {receiver_info}")
     receiver_public_key = receiver_info["data"]["publickey_kyber"]
-    message_id = generate_message_id(sender_data["username"], receiver_username, sender_data, token)
+    message_id = generate_message_id(userdata["username"], receiver_username, userdata, token)
     ciphertext_b64, shared_secret_b64 = encapsulate_shared_secret(receiver_public_key)
     encrypted_payload = encrypt_message_payload(payload, shared_secret_b64)
     msg_data = {
         "messageid": message_id,
-        "sender": sender_data["username"],
+        "sender": userdata["username"],
         "sendertoken": token,
-        "reciever": receiver_username,
-        "sender_pk": sender_data["publickey_kyber_b64"],
-        "reciever_pk": receiver_public_key,
+        "receiver": receiver_username,
+        "sender_pk": userdata["publickey_kyber_b64"],
+        "receiver_pk": receiver_public_key,
         "ciphertext": ciphertext_b64,
         "payload": encrypted_payload
     }
-    r = make_authenticated_request("POST", APIURL + MSG_SEND, sender_data, token, json=msg_data)
+    r = make_authenticated_request("POST", APIURL + MSG_SEND, userdata, token, json=msg_data)
     r.raise_for_status()
     response = r.json()
     if not response.get("ok"):
@@ -391,16 +399,16 @@ def send_message(sender_data: Dict[str, Any], receiver_username: str, payload: s
         "status": "sent",
         "timestamp": response.get("timestamp"),
         "token_exp": response.get("tokenexp"),
-        "sender": sender_data["username"],
-        "reciever": receiver_username,
-        "sender_pk": sender_data["publickey_kyber_b64"],
-        "reciever_pk": receiver_public_key,
+        "sender": userdata["username"],
+        "receiver": receiver_username,
+        "sender_pk": userdata["publickey_kyber_b64"],
+        "receiver_pk": receiver_public_key,
         "payload": payload
     }
 
 # shit ass function name, how long even this shit is??
-def send_message_persistent_storage(userdata: Dict[str, Any], sender_data: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
-    send_data = send_message(sender_data, receiver_username, message, token)
+def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    send_data = send_message(userdata, receiver_username, message, token)
     b64kyberprivate = byte2b64(userdata["privatekey_kyber"])
     payload = encrypt_message_payload(send_data["payload"], b64kyberprivate) # this does feel cursed to do...
     send_data["payload"] = payload
@@ -411,11 +419,11 @@ def send_message_persistent_storage(userdata: Dict[str, Any], sender_data: Dict[
         "status": "sent",
         "timestamp": send_data["timestamp"],
         "token_exp": send_data["token_exp"],
-        "sender": sender_data["username"],
-        "reciever": receiver_username
+        "sender": userdata["username"],
+        "receiver": receiver_username
     }
 
-def get_message(message_id: str, user_data: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     params = {"sendertoken": token}
     r = requests.get(APIURL + MSG_GET + message_id, params=params)
     r.raise_for_status()
@@ -423,28 +431,28 @@ def get_message(message_id: str, user_data: Dict[str, Any], token: str = None) -
     if not response.get("ok"):
         raise RuntimeError(f"Failed to get message: {response}")
     m = response["message"]
-    if m["reciever"] != user_data["username"]:
+    if m["receiver"] != userdata["username"]:
         # sender is trying to get this text, so we gonna use the existing one
         messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
         local_send_data = readjson(messagefp)
-        b64kyberprivate = byte2b64(user_data["privatekey_kyber"])
+        b64kyberprivate = byte2b64(userdata["privatekey_kyber"])
         plaintext = decrypt_message_payload(local_send_data["payload"], b64kyberprivate)
         return {
             "message_id": local_send_data["message_id"],
             "sender": local_send_data["sender"],
-            "receiver": local_send_data["reciever"],
+            "receiver": local_send_data["receiver"],
             "message": plaintext,
             "timestamp": local_send_data["timestamp"],
             "token_exp": local_send_data["token_exp"]
         }
     else:
         ciphertext_b64 = m["ciphertext"]
-        shared_secret_b64 = decapsulate_shared_secret(user_data["privatekey_kyber"], ciphertext_b64)
+        shared_secret_b64 = decapsulate_shared_secret(userdata["privatekey_kyber"], ciphertext_b64)
         plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
         return {
             "message_id": m["messageid"],
             "sender": m["sender"],
-            "receiver": m["reciever"],
+            "receiver": m["receiver"],
             "message": plaintext,
             "timestamp": m.get("timestamp"),
             "token_exp": response.get("tokenexp")
@@ -497,6 +505,8 @@ async def mainUI(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    global userdat
+    global tok
     await ws.accept()
     connections.append(ws)
     # send initial contents
@@ -505,19 +515,26 @@ async def websocket_endpoint(ws: WebSocket):
         while True:
             jsondata = await ws.receive_json()
             action = jsondata.get("action")
-            text = jsondata.get("text", "")
-            if action == "append":
-                scrolled_text_data.append(text)
-            elif action == "clear":
-                scrolled_text_data.clear()
-            elif action == "remove_last":
-                if scrolled_text_data:
-                    scrolled_text_data.pop()
+            username = jsondata.get("username")
+            message = jsondata.get("message", "")
+            access_token_str = tok["tokens"]["access_token"] # pyright: ignore[reportOptionalSubscript]
+            if action == "send":
+                send_message_persistent_storage(userdat, username, message, access_token_str) # pyright: ignore[reportArgumentType]
+                scrolled_text_data.append(messageformatter(userdat["username"], message)) # pyright: ignore[reportOptionalSubscript]
+            elif action == "get":
+                pass
+                # now this is hard... need to sort all messages based on time and using a for loop iter over the incoming messages
+                # but i am harder :) lowkey tho this might break shit like fucking crazy but i have no ideas
+                # gonna rawdog it i guess...
+                messageid = generate_message_id(userdat["username"], username, userdat, access_token_str, update = False) # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                counter = messageid.split("-")[1] # example : 3f7a1b9c8e2d-1 or 3f7a1b9c8e2d-1-msg-V1 or 3f7a1b9c8e2d-1-msg-V1.json
+                
             # broadcast to all
             for conn in connections:
                 await conn.send_json({"lines": scrolled_text_data})
     except WebSocketDisconnect:
         connections.remove(ws)
+        scrolled_text_data.clear()
 
 if __name__ == "__main__":
     import uvicorn
@@ -561,15 +578,15 @@ if __name__ == "__main__":
         # Test messaging workflow with automatic token management
         print("Testing messaging workflow with automatic token management...")
         try:
-            user_data = load_user("john", "super-secret-password!")
-            token_data = create_token(user_data)
+            userdata = load_user("john", "super-secret-password!")
+            token_data = create_token(userdata)
             token = token_data["tokens"]["access_token"]
-            print(f"Authenticated as: {user_data['username']}")
+            print(f"Authenticated as: {userdata['username']}")
             print(f"Initial token expires at: {token_data['exp']}")
             receiver = "alice"
             message = "Hello Alice! This is an encrypted message with automatic token management."
             print(f"\nSending message to {receiver}...")
-            send_result = send_message(user_data, receiver, message, token)
+            send_result = send_message(userdata, receiver, message, token)
             print(f"Message sent! ID: {send_result['message_id']}")
             print(f"Token expires at: {send_result['token_exp']}")
             print(f"\nRetrieving message {send_result['message_id']}...")

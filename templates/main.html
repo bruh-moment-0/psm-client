@@ -18,23 +18,23 @@
         textArea.value = data.lines.join("\n");
         textArea.scrollTop = textArea.scrollHeight;
     };
-    function sendAppend() {
-        const val = document.getElementById("inputBox").value;
-        if (val.trim() !== "") {
-            ws.send(JSON.stringify({action: "append", text: val}));
-            document.getElementById("inputBox").value = "";
-        }
-    }
     function sendMessage() {
         const message = document.getElementById("msgInputBox").value;
         const username = document.getElementById("userInputBox").value;
-        if (val.trim() !== "") {
-            ws.send(JSON.stringify({action: "append", text: val}));
-            document.getElementById("inputBox").value = "";
+        if (message.trim() !== "" && username.trim() !== "") {
+            ws.send(JSON.stringify({action: "send", username: username, message: message}));
+            document.getElementById("msgInputBox").value = "";
+        } else {
+            alert("username or message empty")
         }
     }
     function getMessage() {
-        ws.send(JSON.stringify({action: "getmsg"}));
+        const username = document.getElementById("userInputBox").value;
+        if (username.trim() !== "") {
+            ws.send(JSON.stringify({action: "get", username: username}));
+        } else {
+            alert("username empty")
+        }
     }
 </script>
 {% endblock %}

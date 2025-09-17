@@ -29,13 +29,13 @@ def apiTunnelAlive():
     except requests.exceptions.RequestException as e:
         return False
 
-AUTH_REGISTER = "/auth/register"
-AUTH_CHALLENGE = "/auth/challenge"
-AUTH_RESPOND = "/auth/respond"
-AUTH_PROTECTED = "/auth/protected"
+AUTH_REGISTER = "auth/register"
+AUTH_CHALLENGE = "auth/challenge"
+AUTH_RESPOND = "auth/respond"
+AUTH_PROTECTED = "auth/protected"
 
-MSG_SEND = "/api/message/send"
-MSG_GET = "/api/message/get/" # {messageid}
-MSG_GET_ID = "/api/message/genid"
+MSG_SEND = "api/message/send"
+MSG_GET = "api/message/get/" # {messageid}
+MSG_GET_ID = "api/message/genid"
 
-GET_USER = "/api/user/" # {username}
+GET_USER = "api/user/" # {username}
