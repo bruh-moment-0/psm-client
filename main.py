@@ -27,6 +27,7 @@ import webbrowser # to open the webbrowser
 import requests # we gonna use this ALOT
 import warnings
 import secrets # for 256 bit key gen
+import socket
 import time
 
 # importing the whole pypi ass
@@ -41,7 +42,7 @@ STATICDIR = os.path.join(BASEDIR, "static")
 TEMPLATESDIR = os.path.join(BASEDIR, "templates")
 
 # i have no idea what these do but they make shit work so yes yes
-scrolled_text_data: list[str] = [] # shared buffer
+scrolled_text_data: list[dict] = [] # shared buffer
 connections: list[WebSocket] = [] # connected clients
 
 userdat = None
@@ -51,11 +52,14 @@ app.mount("/static", StaticFiles(directory=STATICDIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATESDIR)
 
 # === Functions ===
-def messageformatter(username: str, message: str) -> str:
-    now = datetime.datetime.now()
-    formattedtime = now.strftime("%d/%m/%Y %H:%M:%S")
-    formatted = f"[{formattedtime}] {username} > {message}"
-    return formatted
+def messageformatter(username: str, message: str, timestamp: str) -> dict:
+    try:
+        dt = datetime.datetime.fromisoformat(timestamp)
+        formatted = f"[{dt.strftime('%d/%m/%Y %H:%M:%S')}] {username} > {message}"
+    except:
+        dt = 0
+        formatted = "null"
+    return {"timestamp": dt, "formatted": formatted}
 
 # === Schemas ===
 class UserClassRegisterModel(BaseModel):
@@ -133,6 +137,50 @@ def decryptAESGCM(blob_b64: str, password: Union[str, bytes], salt_b64: str, non
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
     return cipher.decrypt_and_verify(ct, tag).decode("utf-8")
 
+def _derive_symmetric_key(shared_secret_bytes: bytes, info: bytes = b"psm-session-key") -> bytes:
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32, # 256-bit key for ChaCha20-Poly1305
+        salt=None, # optional; None is fine, but i will supply a per-session salt in the payload or something idk
+        # this shit lowkey sucks ass but i have gotten so far to give up now
+        info=info,
+    )
+    return hkdf.derive(shared_secret_bytes)
+
+def encapsulate_shared_secret(receiver_public_key_b64: str) -> Tuple[str, str]:
+    pk = b642byte(receiver_public_key_b64)
+    ct, ss = encrypt(pk)
+    return byte2b64(ct), byte2b64(ss)
+
+def decapsulate_shared_secret(private_key_bytes: bytes, ciphertext_b64: str) -> str:
+    ct = b642byte(ciphertext_b64)
+    ss = decrypt(private_key_bytes, ct)
+    return byte2b64(ss)
+
+def create_shared_secret(sender_private_key: bytes, receiver_public_key: str) -> str:
+    receiver_public_key_bytes = b642byte(receiver_public_key)
+    shared_secret = decrypt(sender_private_key, receiver_public_key_bytes)
+    return byte2b64(shared_secret)
+
+def encrypt_message_payload(message: str, shared_secret_b64: str) -> str:
+    shared_secret_bytes = b642byte(shared_secret_b64)
+    key = _derive_symmetric_key(shared_secret_bytes)
+    aead = ChaCha20Poly1305(key)
+    nonce = os.urandom(12)
+    ciphertext = aead.encrypt(nonce, message.encode("utf-8"), associated_data=None)
+    combined = nonce + ciphertext
+    return base64.b64encode(combined).decode("utf-8")
+
+def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) -> str:
+    shared_secret_bytes = b642byte(shared_secret_b64)
+    key = _derive_symmetric_key(shared_secret_bytes)
+    combined = base64.b64decode(encrypted_payload_b64)
+    nonce = combined[:12]
+    ciphertext = combined[12:]
+    aead = ChaCha20Poly1305(key)
+    plaintext = aead.decrypt(nonce, ciphertext, associated_data=None)
+    return plaintext.decode("utf-8")
+
 # === Token Management ===
 def check_token_expiration(token: str) -> Optional[int]:
     try:
@@ -186,7 +234,7 @@ def get_challenge(username):
     return j["challenge_id"], j["challenge"]
 
 def respond_challenge(user, challenge_str: str):
-    sig_bytes = user['privatekey_ed25519_obj'].sign(challenge_str.encode())
+    sig_bytes = user["user"]['privatekey_ed25519_obj'].sign(challenge_str.encode())
     return base64.b64encode(sig_bytes).decode()
 
 def get_token(username, challenge_id, signature):
@@ -199,9 +247,9 @@ def get_token(username, challenge_id, signature):
     return r.json()
 
 def create_token(userdata: Dict[str, Any]):
-    cid, challenge = get_challenge(userdata["username"])
+    cid, challenge = get_challenge(userdata["user"]["username"])
     sig = respond_challenge(userdata, challenge) # pass only the string
-    tokens = get_token(userdata["username"], cid, sig)
+    tokens = get_token(userdata["user"]["username"], cid, sig)
     r = requests.get(APIURL + AUTH_PROTECTED, headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
     data = {
         "tokens": tokens,
@@ -255,20 +303,23 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
     (privatekey_ed25519_b64_blob, privatekey_ed25519_b64_salt, privatekey_ed25519_b64_nonce) = encryptAESGCM(privatekey_ed25519_b64, key)
     (privatekey_kyber_b64_blob, privatekey_kyber_b64_salt, privatekey_kyber_b64_nonce) = encryptAESGCM(privatekey_kyber_b64, key)
     data = {
-        "username": username,
-        "privatekey_ed25519_enc": {
-            "blob": privatekey_ed25519_b64_blob,
-            "salt": privatekey_ed25519_b64_salt,
-            "nonce": privatekey_ed25519_b64_nonce,
+        "user": {
+            "username": username,
+            "privatekey_ed25519_enc": {
+                "blob": privatekey_ed25519_b64_blob,
+                "salt": privatekey_ed25519_b64_salt,
+                "nonce": privatekey_ed25519_b64_nonce,
+            },
+            "publickey_ed25519_b64": byte2b64(publickey_ed25519.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)),
+            "privatekey_kyber_enc": {
+                "blob": privatekey_kyber_b64_blob,
+                "salt": privatekey_kyber_b64_salt,
+                "nonce": privatekey_kyber_b64_nonce,
+            },
+            "publickey_kyber_b64": byte2b64(publickey_kyber),
+            "skeypath": os.path.join(USERDIR, f"{username}_client-V1.skey.json")
         },
-        "publickey_ed25519_b64": byte2b64(publickey_ed25519.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)),
-        "privatekey_kyber_enc": {
-            "blob": privatekey_kyber_b64_blob,
-            "salt": privatekey_kyber_b64_salt,
-            "nonce": privatekey_kyber_b64_nonce,
-        },
-        "publickey_kyber_b64": byte2b64(publickey_kyber),
-        "skeypath": os.path.join(USERDIR, f"{username}_client-V1.skey.json")
+        "messages": {}
     }
     u = UserClassRegisterModel(username=username, publickey_kyber=data["publickey_kyber_b64"], publickey_ed25519=data["publickey_ed25519_b64"])
     resp = requests.post(APIURL + AUTH_REGISTER, json=u.model_dump()).json()
@@ -277,12 +328,12 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
     resp = requests.get(APIURL + GET_USER + username).json()
     if not resp.get("ok"):
         raise RuntimeError(f"registration failed: {resp}")
-    data["ver"] = VERSION
-    data["usertype"] = resp["data"]["usertype"]
-    data["creation"] = resp["data"]["creation"]
+    data["user"]["ver"] = VERSION
+    data["user"]["usertype"] = resp["data"]["usertype"]
+    data["user"]["creation"] = resp["data"]["creation"]
     writejson(os.path.join(USERDIR, f"{username}_client-V1.json"), data)
-    data["privatekey_ed25519_obj"] = privatekey_ed25519 # pyright: ignore[reportArgumentType]
-    data["publickey_ed25519_obj"] = publickey_ed25519 # pyright: ignore[reportArgumentType]
+    data["user"]["privatekey_ed25519_obj"] = privatekey_ed25519 # pyright: ignore[reportArgumentType]
+    data["user"]["publickey_ed25519_obj"] = publickey_ed25519 # pyright: ignore[reportArgumentType]
     return data
 
 def load_user(username: str, password: str) -> Dict[str, Any]:
@@ -290,44 +341,27 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
         raise RuntimeError("loading failed: clients files dont exist on the clients storage")
     key = load_skey(username, password)
     data = readjson(os.path.join(USERDIR, f"{username}_client-V1.json"))
-    if data["ver"] != VERSION:
+    if data["user"]["ver"] != VERSION:
         warnings.warn("skey load warn: app version mismatch", RuntimeWarning)
-    privatekey_ed25519_b64 = decryptAESGCM(data["privatekey_ed25519_enc"]["blob"], keydecode(key), data["privatekey_ed25519_enc"]["salt"], data["privatekey_ed25519_enc"]["nonce"])
-    privatekey_kyber_b64 = decryptAESGCM(data["privatekey_kyber_enc"]["blob"], keydecode(key), data["privatekey_kyber_enc"]["salt"], data["privatekey_kyber_enc"]["nonce"])
-    publickey_ed25519 = data["publickey_ed25519_b64"]
-    publickey_kyber = data["publickey_kyber_b64"]
+    privatekey_ed25519_b64 = decryptAESGCM(data["user"]["privatekey_ed25519_enc"]["blob"], keydecode(key), data["user"]["privatekey_ed25519_enc"]["salt"], data["user"]["privatekey_ed25519_enc"]["nonce"])
+    privatekey_kyber_b64 = decryptAESGCM(data["user"]["privatekey_kyber_enc"]["blob"], keydecode(key), data["user"]["privatekey_kyber_enc"]["salt"], data["user"]["privatekey_kyber_enc"]["nonce"])
+    publickey_ed25519 = data["user"]["publickey_ed25519_b64"]
+    publickey_kyber = data["user"]["publickey_kyber_b64"]
     resp = requests.get(APIURL + GET_USER + username).json()
     if not resp.get("ok"):
         raise RuntimeError(f"loading failed: {resp}")
-    data["privatekey_ed25519_obj"] = ed25519.Ed25519PrivateKey.from_private_bytes(b642byte(privatekey_ed25519_b64))
-    data["publickey_ed25519_obj"] = ed25519.Ed25519PublicKey.from_public_bytes(b642byte(publickey_ed25519))
-    data["privatekey_kyber"] = b642byte(privatekey_kyber_b64)
-    data["publickey_kyber"] = b642byte(publickey_kyber)
+    data["user"]["privatekey_ed25519_obj"] = ed25519.Ed25519PrivateKey.from_private_bytes(b642byte(privatekey_ed25519_b64))
+    data["user"]["publickey_ed25519_obj"] = ed25519.Ed25519PublicKey.from_public_bytes(b642byte(publickey_ed25519))
+    data["user"]["privatekey_kyber"] = b642byte(privatekey_kyber_b64)
+    data["user"]["publickey_kyber"] = b642byte(publickey_kyber)
+    data["user"]["key"] = key
     return data
 
 # === Messaging Functions ===
 # > creates "Cryptography" header
 # > puts messaging encryption uhnder a diffrent header
 # shit ass programming time
-def _derive_symmetric_key(shared_secret_bytes: bytes, info: bytes = b"psm-session-key") -> bytes:
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32, # 256-bit key for ChaCha20-Poly1305
-        salt=None, # optional; None is fine, but i will supply a per-session salt in the payload or something idk
-        # this shit lowkey sucks ass but i have gotten so far to give up now
-        info=info,
-    )
-    return hkdf.derive(shared_secret_bytes)
-
-def encapsulate_shared_secret(receiver_public_key_b64: str) -> Tuple[str, str]:
-    pk = b642byte(receiver_public_key_b64)
-    ct, ss = encrypt(pk)
-    return byte2b64(ct), byte2b64(ss)
-
-def decapsulate_shared_secret(private_key_bytes: bytes, ciphertext_b64: str) -> str:
-    ct = b642byte(ciphertext_b64)
-    ss = decrypt(private_key_bytes, ct)
-    return byte2b64(ss)
+# (update on 18/09/2025 fixed this shit ass programming skill issue)
 
 def get_user_info(username: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     r = make_authenticated_request("GET", APIURL + GET_USER + username, userdata, token)
@@ -347,44 +381,20 @@ def generate_message_id(sender: str, receiver: str, userdata: Dict[str, Any], to
         raise RuntimeError(f"Failed to generate message ID: {response}")
     return response["msgid"]
 
-def create_shared_secret(sender_private_key: bytes, receiver_public_key: str) -> str:
-    receiver_public_key_bytes = b642byte(receiver_public_key)
-    shared_secret = decrypt(sender_private_key, receiver_public_key_bytes)
-    return byte2b64(shared_secret)
-
-def encrypt_message_payload(message: str, shared_secret_b64: str) -> str:
-    shared_secret_bytes = b642byte(shared_secret_b64)
-    key = _derive_symmetric_key(shared_secret_bytes)
-    aead = ChaCha20Poly1305(key)
-    nonce = os.urandom(12)
-    ciphertext = aead.encrypt(nonce, message.encode("utf-8"), associated_data=None)
-    combined = nonce + ciphertext
-    return base64.b64encode(combined).decode("utf-8")
-
-def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) -> str:
-    shared_secret_bytes = b642byte(shared_secret_b64)
-    key = _derive_symmetric_key(shared_secret_bytes)
-    combined = base64.b64decode(encrypted_payload_b64)
-    nonce = combined[:12]
-    ciphertext = combined[12:]
-    aead = ChaCha20Poly1305(key)
-    plaintext = aead.decrypt(nonce, ciphertext, associated_data=None)
-    return plaintext.decode("utf-8")
-
 def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     receiver_info = get_user_info(receiver_username, userdata, token)
     if not receiver_info.get("ok"):
         raise RuntimeError(f"Failed to get receiver info: {receiver_info}")
     receiver_public_key = receiver_info["data"]["publickey_kyber"]
-    message_id = generate_message_id(userdata["username"], receiver_username, userdata, token)
+    message_id = generate_message_id(userdata["user"]["username"], receiver_username, userdata, token)
     ciphertext_b64, shared_secret_b64 = encapsulate_shared_secret(receiver_public_key)
     encrypted_payload = encrypt_message_payload(payload, shared_secret_b64)
     msg_data = {
         "messageid": message_id,
-        "sender": userdata["username"],
+        "sender": userdata["user"]["username"],
         "sendertoken": token,
         "receiver": receiver_username,
-        "sender_pk": userdata["publickey_kyber_b64"],
+        "sender_pk": userdata["user"]["publickey_kyber_b64"],
         "receiver_pk": receiver_public_key,
         "ciphertext": ciphertext_b64,
         "payload": encrypted_payload
@@ -399,27 +409,40 @@ def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str,
         "status": "sent",
         "timestamp": response.get("timestamp"),
         "token_exp": response.get("tokenexp"),
-        "sender": userdata["username"],
+        "sender": userdata["user"]["username"],
         "receiver": receiver_username,
-        "sender_pk": userdata["publickey_kyber_b64"],
+        "sender_pk": userdata["user"]["publickey_kyber_b64"],
         "receiver_pk": receiver_public_key,
-        "payload": payload
+        "payload": payload,
+        "shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT": shared_secret_b64 # i think this might be important gang :sob: :wilted-rose:
     }
 
 # shit ass function name, how long even this shit is??
 def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     send_data = send_message(userdata, receiver_username, message, token)
-    b64kyberprivate = byte2b64(userdata["privatekey_kyber"])
-    payload = encrypt_message_payload(send_data["payload"], b64kyberprivate) # this does feel cursed to do...
+    payload = encrypt_message_payload(send_data["payload"], send_data["shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"]) # well this is cursed as shit... but it should work better than the older one!!!
+    userkey = userdata["user"]["key"]
+    userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.skey.json")
+    userfiledata = readjson(userfile)
+    (blob, salt, nonce) = encryptAESGCM(send_data["shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"], userkey)
+    # i mean we are buildidng in such way if the users "shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT" is exposed also the reciever is in danger
+    # but wait, even if it gets leaked that message could be read by the attackers? so no needto use another key? also this is high entropy so shouldnt be a problem?
+    # gang i might lowkey have no idea what the fucking shit i am doing bruh
+    userfiledata["messages"][send_data['message_id']] = {
+        "blob": blob,
+        "salt": salt,
+        "nonce": nonce
+    }
     send_data["payload"] = payload
     messagefp = os.path.join(MESSAGEDIR, f"{send_data['message_id']}-msg-V1-CLIENT.json")
+    writejson(userfile, userfiledata)
     writejson(messagefp, send_data)
     return {
         "message_id": send_data["message_id"],
         "status": "sent",
         "timestamp": send_data["timestamp"],
         "token_exp": send_data["token_exp"],
-        "sender": userdata["username"],
+        "sender": userdata["user"]["username"],
         "receiver": receiver_username
     }
 
@@ -431,12 +454,16 @@ def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) ->
     if not response.get("ok"):
         raise RuntimeError(f"Failed to get message: {response}")
     m = response["message"]
-    if m["receiver"] != userdata["username"]:
+    if m["receiver"] != userdata["user"]["username"]:
         # sender is trying to get this text, so we gonna use the existing one
         messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
+        userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.skey.json")
+        userfiledata = readjson(userfile)
+        userkey = userdata["user"]["key"]
+        shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userfiledata["messages"][message_id]["blob"], userkey, userfiledata["messages"][message_id]["salt"], userfiledata["messages"][message_id]["nonce"])
+        # yes super optimized code best out there
         local_send_data = readjson(messagefp)
-        b64kyberprivate = byte2b64(userdata["privatekey_kyber"])
-        plaintext = decrypt_message_payload(local_send_data["payload"], b64kyberprivate)
+        plaintext = decrypt_message_payload(local_send_data["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT)
         return {
             "message_id": local_send_data["message_id"],
             "sender": local_send_data["sender"],
@@ -447,15 +474,15 @@ def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) ->
         }
     else:
         ciphertext_b64 = m["ciphertext"]
-        shared_secret_b64 = decapsulate_shared_secret(userdata["privatekey_kyber"], ciphertext_b64)
+        shared_secret_b64 = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"], ciphertext_b64)
         plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
         return {
             "message_id": m["messageid"],
             "sender": m["sender"],
             "receiver": m["receiver"],
             "message": plaintext,
-            "timestamp": m.get("timestamp"),
-            "token_exp": response.get("tokenexp")
+            "timestamp": m["timestamp"],
+            "token_exp": response["tokenexp"]
         }
 
 # === client web server shit ===
@@ -510,103 +537,51 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     connections.append(ws)
     # send initial contents
-    await ws.send_json({"lines": scrolled_text_data})
+    await ws.send_json({"lines": [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]}) # pyright: ignore[reportArgumentType]
     try:
         while True:
             jsondata = await ws.receive_json()
             action = jsondata.get("action")
             username = jsondata.get("username")
             message = jsondata.get("message", "")
-            access_token_str = tok["tokens"]["access_token"] # pyright: ignore[reportOptionalSubscript]
+            access_token_str = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
             if action == "send":
-                send_message_persistent_storage(userdat, username, message, access_token_str) # pyright: ignore[reportArgumentType]
-                scrolled_text_data.append(messageformatter(userdat["username"], message)) # pyright: ignore[reportOptionalSubscript]
+                messagedata = send_message_persistent_storage(userdat, username, message, access_token_str)  # pyright: ignore[reportArgumentType]
+                if messagedata["status"] != "sent":
+                    raise RuntimeError("message couldn't be sent")
+                timestamp = messagedata["timestamp"]
+                entry = messageformatter(userdat["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
+                scrolled_text_data.append(entry)
             elif action == "get":
-                pass
-                # now this is hard... need to sort all messages based on time and using a for loop iter over the incoming messages
-                # but i am harder :) lowkey tho this might break shit like fucking crazy but i have no ideas
-                # gonna rawdog it i guess...
-                messageid = generate_message_id(userdat["username"], username, userdat, access_token_str, update = False) # pyright: ignore[reportArgumentType, reportOptionalSubscript]
-                counter = messageid.split("-")[1] # example : 3f7a1b9c8e2d-1 or 3f7a1b9c8e2d-1-msg-V1 or 3f7a1b9c8e2d-1-msg-V1.json
-                
-            # broadcast to all
+                scrolled_text_data.clear()
+                messageid = generate_message_id(userdat["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                counter = int(messageid.split("-")[1])
+                usershash = messageid.split("-")[0]
+                for msgnum in range(1, counter + 1):
+                    msgid = f"{usershash}-{msgnum}"
+                    messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
+                    plaintext = messagedata["message"]
+                    sender = messagedata["sender"]
+                    timestamp = messagedata["timestamp"]
+                    print(timestamp)
+                    entry = messageformatter(sender, plaintext, timestamp)
+                    scrolled_text_data.append(entry)
+            # sorting before sending
+            sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
             for conn in connections:
-                await conn.send_json({"lines": scrolled_text_data})
+                await conn.send_json({"lines": sorted_lines})
     except WebSocketDisconnect:
         connections.remove(ws)
         scrolled_text_data.clear()
 
+def portused(port, host="127.0.0.1"):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex((host, port)) == 0
+
 if __name__ == "__main__":
     import uvicorn
     port = 8080
+    while portused(port):
+        port += 1
     webbrowser.open_new(f"http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-"""
-# === testing ===
-if __name__ == "__main__":
-    # Test user creation and loading
-    try:
-        udc = create_user("john", "super-secret-password!")
-        print("User created successfully")
-        print(f"Username: {udc['username']}")
-        print(f"Public Key (Kyber): {udc['publickey_kyber_b64']}...")
-        print("\n"*2)
-    except Exception as e:
-        print(f"User creation error: {e}")
-    try:
-        udc = create_user("alice", "super-secret-password!")
-        print("User created successfully")
-        print(f"Username: {udc['username']}")
-        print(f"Public Key (Kyber): {udc['publickey_kyber_b64'][:50]}...")
-        print("\n"*2)
-    except Exception as e:
-        print(f"User creation error: {e}")
-
-    try:
-        udl = load_user("john", "super-secret-password!")
-        print("User loaded successfully")
-        print(f"Username: {udl['username']}")
-        print(f"User Type: {udl['usertype']}")
-        
-        # Test token creation
-        tok = create_token(udl)
-        print(f"Token created successfully")
-        print(f"Token expires at: {tok['exp']}")
-        print("\n"*2)
-        
-        # Test messaging workflow with automatic token management
-        print("Testing messaging workflow with automatic token management...")
-        try:
-            userdata = load_user("john", "super-secret-password!")
-            token_data = create_token(userdata)
-            token = token_data["tokens"]["access_token"]
-            print(f"Authenticated as: {userdata['username']}")
-            print(f"Initial token expires at: {token_data['exp']}")
-            receiver = "alice"
-            message = "Hello Alice! This is an encrypted message with automatic token management."
-            print(f"\nSending message to {receiver}...")
-            send_result = send_message(userdata, receiver, message, token)
-            print(f"Message sent! ID: {send_result['message_id']}")
-            print(f"Token expires at: {send_result['token_exp']}")
-            print(f"\nRetrieving message {send_result['message_id']}...")
-            alice_data = load_user("alice", "super-secret-password!")
-            alice_token_data = create_token(alice_data)
-            alice_token = alice_token_data["tokens"]["access_token"]
-            retrieved_message = get_message(send_result['message_id'], alice_data, alice_token)
-            print(f"Retrieved message: {retrieved_message['message']}")
-            print(f"From: {retrieved_message['sender']}")
-            print(f"Timestamp: {retrieved_message['timestamp']}")
-            print(f"\nChecking token expiration...")
-            exp_time = check_token_expiration(token)
-            if exp_time:
-                print(f"Token expires at: {exp_time}")
-                print(f"Will expire soon: {is_token_expiring_soon(token)}")
-            else:
-                print("Token is invalid")
-        except Exception as e:
-            print(f"Error in messaging workflow: {e}")
-        
-    except Exception as e:
-        print(f"User loading/messaging error: {e}")
-"""
