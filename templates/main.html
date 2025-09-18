@@ -2,7 +2,7 @@
 {% block content %}
 <h2>PSM CLIENT SERVER MAIN MESSAGING PAGE</h2>
 <h3>{{ version }}</h3>
-<h4>logged in as {{ username }}</h4>
+<h4>logged in as {{ username }}</h4><button onclick="remove()">Remove Account</button>
 
 <textarea id="scrolledText" readonly></textarea>
     <input type="text" id="msgInputBox" placeholder="enter message...">
@@ -35,6 +35,9 @@
         } else {
             alert("username empty")
         }
+    }
+    function remove() {
+        ws.send(JSON.stringify({action: "removeaccount"}));
     }
 </script>
 {% endblock %}

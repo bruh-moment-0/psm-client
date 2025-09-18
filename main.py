@@ -67,6 +67,7 @@ class UserClassRegisterModel(BaseModel):
     publickey_kyber: str
     publickey_ed25519: str
 
+# i dont know why but i am not using any other models... weird...
 class MessageSendModel(BaseModel):
     messageid: str
     sender: str
@@ -258,6 +259,45 @@ def create_token(userdata: Dict[str, Any]):
     return data
 
 # === Helpers ===
+def removeaccount():
+    global userdat
+    global tok
+    if not userdat:
+        raise Exception("not logged in. cannot remove account.")
+    username = userdat["user"]["username"]
+    access_token = tok["tokens"]["access_token"] # pyright: ignore[reportOptionalSubscript]
+    try:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        response = requests.get(APIURL + AUTH_REMOVE, headers=headers) 
+        if response.status_code == 200:
+            print(f"✅ Successfully removed account '{username}' from the server.")
+        else:
+            raise Exception(f"server side account removing failed code: {response.status_code} details: {response.text}")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"an error occured while sending request to server: {e}")
+    if "messages" in userdat and isinstance(userdat["messages"], dict):
+        for msg_id in userdat["messages"].keys():
+            message_file = os.path.join(MESSAGEDIR, f"{msg_id}-msg-V1-CLIENT.json")
+            if os.path.exists(message_file):
+                try:
+                    os.remove(message_file)
+                except OSError as e:
+                    raise Exception(f"an error occured while removing message file {message_file}: {e}")
+    user_data_file = os.path.join(USERDIR, f"{username}_client-V1.json")
+    if os.path.exists(user_data_file):
+        try:
+            os.remove(user_data_file)
+        except OSError as e:
+            raise Exception(f"an error occured while removing user data file {user_data_file}: {e}")
+    skey_file = os.path.join(USERDIR, f"{username}_client-V1.skey.json")
+    if os.path.exists(skey_file):
+        try:
+            os.remove(skey_file)
+        except OSError as e:
+            raise Exception(f"an error occured while removing skey file {skey_file}: {e}")
+    userdat = None
+    tok = None
+
 def create_skey(username: str, password: str) -> str:
     key = keygen()
     blob, salt, nonce = encryptAESGCM(key, password)
@@ -321,7 +361,7 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
         },
         "messages": {}
     }
-    u = UserClassRegisterModel(username=username, publickey_kyber=data["publickey_kyber_b64"], publickey_ed25519=data["publickey_ed25519_b64"])
+    u = UserClassRegisterModel(username=username, publickey_kyber=data["user"]["publickey_kyber_b64"], publickey_ed25519=data["user"]["publickey_ed25519_b64"])
     resp = requests.post(APIURL + AUTH_REGISTER, json=u.model_dump()).json()
     if not resp.get("ok"):
         raise RuntimeError(f"registration failed: {resp}")
@@ -362,7 +402,6 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
 # > puts messaging encryption uhnder a diffrent header
 # shit ass programming time
 # (update on 18/09/2025 fixed this shit ass programming skill issue)
-
 def get_user_info(username: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     r = make_authenticated_request("GET", APIURL + GET_USER + username, userdata, token)
     r.raise_for_status()
@@ -414,15 +453,15 @@ def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str,
         "sender_pk": userdata["user"]["publickey_kyber_b64"],
         "receiver_pk": receiver_public_key,
         "payload": payload,
+        "encrypted_payload_for_storage": encrypted_payload,
         "shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT": shared_secret_b64 # i think this might be important gang :sob: :wilted-rose:
     }
 
 # shit ass function name, how long even this shit is??
 def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username: str, message: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     send_data = send_message(userdata, receiver_username, message, token)
-    payload = encrypt_message_payload(send_data["payload"], send_data["shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"]) # well this is cursed as shit... but it should work better than the older one!!!
     userkey = userdata["user"]["key"]
-    userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.skey.json")
+    userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.json")
     userfiledata = readjson(userfile)
     (blob, salt, nonce) = encryptAESGCM(send_data["shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"], userkey)
     # i mean we are buildidng in such way if the users "shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT" is exposed also the reciever is in danger
@@ -433,7 +472,7 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
         "salt": salt,
         "nonce": nonce
     }
-    send_data["payload"] = payload
+    send_data["payload"] = send_data.pop("encrypted_payload_for_storage")
     messagefp = os.path.join(MESSAGEDIR, f"{send_data['message_id']}-msg-V1-CLIENT.json")
     writejson(userfile, userfiledata)
     writejson(messagefp, send_data)
@@ -457,7 +496,7 @@ def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) ->
     if m["receiver"] != userdata["user"]["username"]:
         # sender is trying to get this text, so we gonna use the existing one
         messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
-        userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.skey.json")
+        userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.json")
         userfiledata = readjson(userfile)
         userkey = userdata["user"]["key"]
         shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userfiledata["messages"][message_id]["blob"], userkey, userfiledata["messages"][message_id]["salt"], userfiledata["messages"][message_id]["nonce"])
@@ -528,7 +567,7 @@ async def mainUI(request: Request):
         return RedirectResponse(url="/login", status_code=302)
     if not tok:
         tok = create_token(userdat)
-    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["username"]})
+    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"]})
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -545,31 +584,42 @@ async def websocket_endpoint(ws: WebSocket):
             username = jsondata.get("username")
             message = jsondata.get("message", "")
             access_token_str = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
-            if action == "send":
-                messagedata = send_message_persistent_storage(userdat, username, message, access_token_str)  # pyright: ignore[reportArgumentType]
-                if messagedata["status"] != "sent":
-                    raise RuntimeError("message couldn't be sent")
-                timestamp = messagedata["timestamp"]
-                entry = messageformatter(userdat["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
-                scrolled_text_data.append(entry)
-            elif action == "get":
-                scrolled_text_data.clear()
-                messageid = generate_message_id(userdat["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
-                counter = int(messageid.split("-")[1])
-                usershash = messageid.split("-")[0]
-                for msgnum in range(1, counter + 1):
-                    msgid = f"{usershash}-{msgnum}"
-                    messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
-                    plaintext = messagedata["message"]
-                    sender = messagedata["sender"]
+            if action in ["send", "get"]:
+                if action == "send":
+                    messagedata = send_message_persistent_storage(userdat, username, message, access_token_str)  # pyright: ignore[reportArgumentType]
+                    if messagedata["status"] != "sent":
+                        raise RuntimeError("message couldn't be sent")
                     timestamp = messagedata["timestamp"]
-                    print(timestamp)
-                    entry = messageformatter(sender, plaintext, timestamp)
+                    entry = messageformatter(userdat["user"]["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
                     scrolled_text_data.append(entry)
-            # sorting before sending
-            sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
-            for conn in connections:
-                await conn.send_json({"lines": sorted_lines})
+                elif action == "get":
+                    scrolled_text_data.clear()
+                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                    counter = int(messageid.split("-")[1])
+                    usershash = messageid.split("-")[0]
+                    for msgnum in range(1, counter + 1):
+                        msgid = f"{usershash}-{msgnum}"
+                        try:
+                            messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
+                        except:
+                            messagedata = {
+                                "message": "corrupted or not found",
+                                "sender": "unknown",
+                                "timestamp": None
+                            }
+                        plaintext = messagedata["message"]
+                        sender = messagedata["sender"]
+                        timestamp = messagedata["timestamp"]
+                        entry = messageformatter(sender, plaintext, timestamp)
+                        scrolled_text_data.append(entry)
+                # sorting before sending
+                sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
+                for conn in connections:
+                    await conn.send_json({"lines": sorted_lines})
+            else:
+                if action == "removeaccount":
+                    removeaccount()
+                    raise WebSocketDisconnect
     except WebSocketDisconnect:
         connections.remove(ws)
         scrolled_text_data.clear()
