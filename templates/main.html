@@ -2,7 +2,7 @@
 {% block content %}
 <h2>PSM CLIENT SERVER MAIN MESSAGING PAGE</h2>
 <h3>{{ version }}</h3>
-<h4>logged in as {{ username }}</h4><button onclick="remove()">Remove Account</button>
+<h4>logged in as {{ username }}</h4>
 
 <textarea id="scrolledText" readonly></textarea>
     <input type="text" id="msgInputBox" placeholder="enter message...">
@@ -13,10 +13,13 @@
 <script>
     const ws = new WebSocket(`ws://${location.host}/ws`);
     const textArea = document.getElementById("scrolledText");
+    let isRefreshing = false;
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         textArea.value = data.lines.join("\n");
         textArea.scrollTop = textArea.scrollHeight;
+        isRefreshing = false;
+        refreshLoop();
     };
     function sendMessage() {
         const message = document.getElementById("msgInputBox").value;
@@ -25,19 +28,28 @@
             ws.send(JSON.stringify({action: "send", username: username, message: message}));
             document.getElementById("msgInputBox").value = "";
         } else {
-            alert("username or message empty")
+            alert("username or message empty");
         }
     }
     function getMessage() {
         const username = document.getElementById("userInputBox").value;
         if (username.trim() !== "") {
+            isRefreshing = true;
             ws.send(JSON.stringify({action: "get", username: username}));
         } else {
-            alert("username empty")
+            textArea.value = "username empty";
+        }
+    }
+    function refreshLoop() {
+        if (!isRefreshing) {
+            getMessage();
         }
     }
     function remove() {
         ws.send(JSON.stringify({action: "removeaccount"}));
     }
+    ws.onopen = () => {
+        refreshLoop();
+    };
 </script>
 {% endblock %}

@@ -1,0 +1,15 @@
+PyJWT
+Jinja2
+urllib3
+uvicorn
+fastapi
+requests
+pydantic
+pqcrypto
+websockets
+MarkupSafe
+argon2-cffi
+pycryptodome
+cryptography
+python-dotenv
+python-multipart

@@ -25,6 +25,7 @@ from urllib.parse import quote # to make text url friendly
 from Crypto.Cipher import AES # AES256GCM
 import webbrowser # to open the webbrowser
 import requests # we gonna use this ALOT
+import datetime
 import warnings
 import secrets # for 256 bit key gen
 import socket
@@ -57,8 +58,8 @@ def messageformatter(username: str, message: str, timestamp: str) -> dict:
         dt = datetime.datetime.fromisoformat(timestamp)
         formatted = f"[{dt.strftime('%d/%m/%Y %H:%M:%S')}] {username} > {message}"
     except:
-        dt = 0
-        formatted = "null"
+        dt = datetime.datetime.min
+        formatted = f"[unknown-time] {username} > {message}"
     return {"timestamp": dt, "formatted": formatted}
 
 # === Schemas ===
@@ -263,40 +264,39 @@ def removeaccount():
     global userdat
     global tok
     if not userdat:
-        raise Exception("not logged in. cannot remove account.")
+        raise RuntimeError("not logged in. cannot remove account.")
     username = userdat["user"]["username"]
-    access_token = tok["tokens"]["access_token"] # pyright: ignore[reportOptionalSubscript]
+    access_token = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
     try:
         headers = {"Authorization": f"Bearer {access_token}"}
-        response = requests.get(APIURL + AUTH_REMOVE, headers=headers) 
-        if response.status_code == 200:
-            print(f"✅ Successfully removed account '{username}' from the server.")
-        else:
-            raise Exception(f"server side account removing failed code: {response.status_code} details: {response.text}")
+        response = requests.delete(APIURL + AUTH_REMOVE, headers=headers)
+        if response.status_code != 200:
+            raise RuntimeError(f"server-side account removal failed code: {response.status_code} details: {response.text}")
     except requests.exceptions.RequestException as e:
-        raise Exception(f"an error occured while sending request to server: {e}")
+        raise RuntimeError(f"error sending account removal request to server: {e}")
     if "messages" in userdat and isinstance(userdat["messages"], dict):
-        for msg_id in userdat["messages"].keys():
+        for msg_id in list(userdat["messages"].keys()):
             message_file = os.path.join(MESSAGEDIR, f"{msg_id}-msg-V1-CLIENT.json")
             if os.path.exists(message_file):
                 try:
                     os.remove(message_file)
                 except OSError as e:
-                    raise Exception(f"an error occured while removing message file {message_file}: {e}")
+                    raise RuntimeError(f"failed to remove message file {message_file}: {e}")
     user_data_file = os.path.join(USERDIR, f"{username}_client-V1.json")
     if os.path.exists(user_data_file):
         try:
             os.remove(user_data_file)
         except OSError as e:
-            raise Exception(f"an error occured while removing user data file {user_data_file}: {e}")
+            raise RuntimeError(f"failed to remove user data file {user_data_file}: {e}")
     skey_file = os.path.join(USERDIR, f"{username}_client-V1.skey.json")
     if os.path.exists(skey_file):
         try:
             os.remove(skey_file)
         except OSError as e:
-            raise Exception(f"an error occured while removing skey file {skey_file}: {e}")
+            raise RuntimeError(f"failed to remove skey file {skey_file}: {e}")
     userdat = None
     tok = None
+    return {"ok": True, "message": f"account '{username}' removed successfully (server + client)"}
 
 def create_skey(username: str, password: str) -> str:
     key = keygen()
@@ -584,42 +584,42 @@ async def websocket_endpoint(ws: WebSocket):
             username = jsondata.get("username")
             message = jsondata.get("message", "")
             access_token_str = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
-            if action in ["send", "get"]:
-                if action == "send":
-                    messagedata = send_message_persistent_storage(userdat, username, message, access_token_str)  # pyright: ignore[reportArgumentType]
-                    if messagedata["status"] != "sent":
-                        raise RuntimeError("message couldn't be sent")
+            if action == "send":
+                messagedata = send_message_persistent_storage(userdat, username, message, access_token_str)  # pyright: ignore[reportArgumentType]
+                if messagedata["status"] != "sent":
+                    raise RuntimeError("message couldn't be sent")
+                timestamp = messagedata["timestamp"]
+                entry = messageformatter(userdat["user"]["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
+                scrolled_text_data.append(entry)
+            elif action == "get":
+                scrolled_text_data.clear()
+                messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                counter = int(messageid.split("-")[1])
+                usershash = messageid.split("-")[0]
+                for msgnum in range(1, counter + 1):
+                    msgid = f"{usershash}-{msgnum}"
+                    try:
+                        messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
+                    except:
+                        messagedata = {
+                            "message": "corrupted or not found",
+                            "sender": "unknown",
+                            "timestamp": None
+                        }
+                    plaintext = messagedata["message"]
+                    sender = messagedata["sender"]
                     timestamp = messagedata["timestamp"]
-                    entry = messageformatter(userdat["user"]["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
+                    entry = messageformatter(sender, plaintext, timestamp)
                     scrolled_text_data.append(entry)
-                elif action == "get":
-                    scrolled_text_data.clear()
-                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
-                    counter = int(messageid.split("-")[1])
-                    usershash = messageid.split("-")[0]
-                    for msgnum in range(1, counter + 1):
-                        msgid = f"{usershash}-{msgnum}"
-                        try:
-                            messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
-                        except:
-                            messagedata = {
-                                "message": "corrupted or not found",
-                                "sender": "unknown",
-                                "timestamp": None
-                            }
-                        plaintext = messagedata["message"]
-                        sender = messagedata["sender"]
-                        timestamp = messagedata["timestamp"]
-                        entry = messageformatter(sender, plaintext, timestamp)
-                        scrolled_text_data.append(entry)
-                # sorting before sending
+            # sorting before sending
+            try:
                 sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
-                for conn in connections:
-                    await conn.send_json({"lines": sorted_lines})
-            else:
-                if action == "removeaccount":
-                    removeaccount()
-                    raise WebSocketDisconnect
+            except Exception as e:
+                sorted_lines = [entry["formatted"] for entry in scrolled_text_data]
+                sorted_lines += "sorting failed, see logs"
+                warnings.warn("message sorting failed, skipping sorting: {e}", RuntimeWarning)
+            for conn in connections:
+                await conn.send_json({"lines": sorted_lines})
     except WebSocketDisconnect:
         connections.remove(ws)
         scrolled_text_data.clear()
@@ -633,5 +633,5 @@ if __name__ == "__main__":
     port = 8080
     while portused(port):
         port += 1
-    webbrowser.open_new(f"http://localhost:{port}")
+    webbrowser.open_new(f"http://localhost:{port}") # lowkey takes longer to init the server startup so its right before it
     uvicorn.run(app, host="0.0.0.0", port=port)

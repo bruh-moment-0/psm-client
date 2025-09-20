@@ -1,4 +1,5 @@
 import requests
+import warnings
 
 # default:
 # DEMOMODE = False
@@ -10,12 +11,13 @@ if not DEMOMODE:
     try:
         resp = requests.get(_URLBASE)
     except:
-        import unsafeadapter # worst adapter ever
-        # but fixes CA problems and other unsafe connection caused bugs
+        warnings.warn(
+            "WARNING: UNSAFE ADAPTER IS INITIATED BECAUSE OF NETWORK LEVEL PROBLEMS. WARNING, THIS ADAPTER IS NOT SAFE AND IS VULNERABLE TO MITM ATTACKS. YOUR ONLY LINE OF DEFENCE IS THE ENCRYPTION ALGORITHMS AND YOUR KEYS. DO NOT SHARE ANY FILES FROM /storage"
+        , RuntimeWarning)
+        import unsafeadapter # worst adapter ever but fixes CA problems and other unsafe connection caused bugs
         # best way to fight something unsafe is to do something more unsafe i guess
         resp = requests.get(_URLBASE)
     APIURL = resp.text.strip() + "/"
-
 else:
     APIURL = "http://127.0.0.1:8000/"
 

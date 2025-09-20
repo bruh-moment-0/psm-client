@@ -1,7 +1,6 @@
 # data.py but for clients!
 
 from typing import Any
-import datetime # i normally go with time but thats just not cool as this
 import base64
 import json # you guessed it, the best db ever
 import os
