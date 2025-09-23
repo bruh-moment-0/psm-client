@@ -3,7 +3,7 @@ import warnings
 
 # default:
 # DEMOMODE = False
-DEMOMODE = False
+DEMOMODE = True
 
 _URLBASE = "https://raw.githubusercontent.com/bruh-moment-0/psm-url/refs/heads/main/url.txt"
 

@@ -33,6 +33,13 @@ import time
 
 # importing the whole pypi ass
 
+if NOTREADY:
+    print("code is NOTREADY for usage for now, due to security concerns. please use an older version until this version is fixed.")
+    print("issue: get persistent writes shared secret")
+    print(f"current version: {VERSION}")
+    print("reminder, THIS FAILSAFE ONLY ACTIVATES IF THERE IS A BIG SECURITY PROBLEM!!!")
+    exit(1)
+
 SALT_LENGTH = 16
 NONCE_LENGTH = 12
 KEY_LENGTH = 32
@@ -57,9 +64,10 @@ def messageformatter(username: str, message: str, timestamp: str) -> dict:
     try:
         dt = datetime.datetime.fromisoformat(timestamp)
         formatted = f"[{dt.strftime('%d/%m/%Y %H:%M:%S')}] {username} > {message}"
-    except:
+    except Exception as e:
         dt = datetime.datetime.min
         formatted = f"[unknown-time] {username} > {message}"
+        warnings.warn(f"WARNING: sorting failed on 'messageformatter': {e}, data: {username} {message} {timestamp}")
     return {"timestamp": dt, "formatted": formatted}
 
 # === Schemas ===
@@ -465,7 +473,7 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
     userfiledata = readjson(userfile)
     (blob, salt, nonce) = encryptAESGCM(send_data["shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"], userkey)
     # i mean we are buildidng in such way if the users "shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT" is exposed also the reciever is in danger
-    # but wait, even if it gets leaked that message could be read by the attackers? so no needto use another key? also this is high entropy so shouldnt be a problem?
+    # but wait, even if it gets leaked that message could be read by the attackers? so no need to use another key? also this is high entropy so shouldnt be a problem?
     # gang i might lowkey have no idea what the fucking shit i am doing bruh
     userfiledata["messages"][send_data['message_id']] = {
         "blob": blob,
@@ -516,6 +524,7 @@ def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) ->
         shared_secret_b64 = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"], ciphertext_b64)
         plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
         return {
+            "ciphertext_b64": m["ciphertext"],
             "message_id": m["messageid"],
             "sender": m["sender"],
             "receiver": m["receiver"],
@@ -523,6 +532,45 @@ def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) ->
             "timestamp": m["timestamp"],
             "token_exp": response["tokenexp"]
         }
+
+def get_message_persistent_storage(message_id: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+    messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
+    userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.json")
+    userfiledata = readjson(userfile)
+    userkey = userdata["user"]["key"]
+    if os.path.exists(messagefp):
+        local_data = readjson(messagefp)
+        enc_secret = userfiledata["messages"][message_id]
+        shared_secret_b64 = decryptAESGCM(enc_secret["blob"], userkey, enc_secret["salt"], enc_secret["nonce"])
+        plaintext = decrypt_message_payload(local_data["payload"], shared_secret_b64)
+        return {
+            "message_id": local_data["message_id"],
+            "sender": local_data["sender"],
+            "receiver": local_data["receiver"],
+            "message": plaintext,
+            "timestamp": local_data["timestamp"],
+            "token_exp": local_data["token_exp"]
+        }
+    else:
+        get_data = get_message(message_id, userdata, token)
+        shared_secret_b64 = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"],get_data["ciphertext_b64"])
+        blob, salt, nonce = encryptAESGCM(shared_secret_b64, userkey)
+        userfiledata["messages"][get_data["message_id"]] = {
+            "blob": blob,
+            "salt": salt,
+            "nonce": nonce
+        }
+        local_copy = {
+            "message_id": get_data["message_id"],
+            "sender": get_data["sender"],
+            "receiver": get_data["receiver"],
+            "payload": encrypt_message_payload(get_data["message"], shared_secret_b64),
+            "timestamp": get_data["timestamp"],
+            "token_exp": get_data["token_exp"]
+        }
+        writejson(userfile, userfiledata)
+        writejson(messagefp, local_copy)
+        return get_data
 
 # === client web server shit ===
 @app.exception_handler(RuntimeError)
@@ -601,7 +649,8 @@ async def websocket_endpoint(ws: WebSocket):
                     for msgnum in range(1, counter + 1):
                         msgid = f"{usershash}-{msgnum}"
                         try:
-                            messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
+                            # PLEASE WORK PLEASE I BEG YOU PYTHON GODS
+                            messagedata = get_message_persistent_storage(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
                         except:
                             messagedata = {
                                 "message": "corrupted or not found",
@@ -614,11 +663,14 @@ async def websocket_endpoint(ws: WebSocket):
                         entry = messageformatter(sender, plaintext, timestamp)
                         scrolled_text_data.append(entry)
             # sorting before sending
+            # its crazy how much that this fucking fails
+            # "stuff made here" incorrect
+            # "stuff FUCKED here" correct
             try:
                 sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
             except Exception as e:
                 sorted_lines = [entry["formatted"] for entry in scrolled_text_data]
-                sorted_lines += "sorting failed, see logs"
+                sorted_lines.append("sorting failed, see logs")
                 warnings.warn("message sorting failed, skipping sorting: {e}", RuntimeWarning)
             stop = time.time()
             apistat = [f"api url: {APIURL} is alive: {apiTunnelAlive()}", f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start)):.2f}", "MOTD: Have a nice day!"]

@@ -5,7 +5,11 @@ import base64
 import json # you guessed it, the best db ever
 import os
 
-VERSION = "CLIENT V1.8 STABLE (built 20:45 GMT+0 13/09/2025)"
+# Normally False but if this is set to True, better leave it be True...
+# ONLY FOR REALLY IMPORTANT PROBLEMS
+NOTREADY = True
+
+VERSION = "CLIENT V1.10 WIP (built 20:15 GMT+0 23/09/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STORAGEDIR = os.path.join(BASEDIR, "storage")
 FILESDIR = os.path.join(STORAGEDIR, "files")

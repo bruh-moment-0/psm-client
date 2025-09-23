@@ -16,6 +16,7 @@
     const scrolledText = document.getElementById("scrolledText");
     const serverText = document.getElementById("serverText");
     let isRefreshing = false;
+    let refreshTimer = null;
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         scrolledText.value = data.lines.join("\n");
@@ -37,13 +38,16 @@
     }
     function getMessage() {
         const username = document.getElementById("userInputBox").value;
-        isRefreshing = true;
-        ws.send(JSON.stringify({action: "get", username: username.trim()}));
+        if (!isRefreshing) {
+            isRefreshing = true;
+            ws.send(JSON.stringify({action: "get", username: username.trim()})); // Uncaught TypeError: Cannot read properties of undefined (reading 'join') at ws.onmessage
+        }
     }
     function refreshLoop() {
-        if (!isRefreshing) {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
             getMessage();
-        }
+        }, 750);
     }
     function remove() {
         ws.send(JSON.stringify({action: "removeaccount"}));
@@ -52,4 +56,5 @@
         refreshLoop();
     };
 </script>
+
 {% endblock %}
