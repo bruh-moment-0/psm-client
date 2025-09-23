@@ -22,18 +22,35 @@ header {
     margin-bottom: 1rem;
 }
 
-textarea {
+#serverText {
+    width: 100%;
+    height: 70px;
+    resize: none;
+    overflow-y: scroll;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 14px;
+}
+
+#scrolledText {
     width: 100%;
     height: 300px;
     resize: none;
     overflow-y: scroll;
-    font-family: monospace;
+    font-family: Consolas, "Courier New", monospace;
     font-size: 14px;
 }
 
 error {
     color: red;
     border: 1px solid red; 
+    padding: 10px;
+    margin-bottom: 15px;
+    border-radius: 5px;
+}
+
+warning {
+    color: yellow;
+    border: 1px solid yellow; 
     padding: 10px;
     margin-bottom: 15px;
     border-radius: 5px;

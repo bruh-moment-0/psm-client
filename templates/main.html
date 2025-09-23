@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>PSM CLIENT SERVER MAIN MESSAGING PAGE</h2>
-<h3>{{ version }}</h3>
 <h4>logged in as {{ username }}</h4>
+
+<textarea id="serverText" readonly></textarea>
 
 <textarea id="scrolledText" readonly></textarea>
     <input type="text" id="msgInputBox" placeholder="enter message...">
@@ -12,12 +13,15 @@
 
 <script>
     const ws = new WebSocket(`ws://${location.host}/ws`);
-    const textArea = document.getElementById("scrolledText");
+    const scrolledText = document.getElementById("scrolledText");
+    const serverText = document.getElementById("serverText");
     let isRefreshing = false;
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        textArea.value = data.lines.join("\n");
-        textArea.scrollTop = textArea.scrollHeight;
+        scrolledText.value = data.lines.join("\n");
+        scrolledText.scrollTop = scrolledText.scrollHeight;
+        serverText.value = data.apistat.join("\n");
+        serverText.scrollTop = serverText.scrollHeight;
         isRefreshing = false;
         refreshLoop();
     };
@@ -33,12 +37,8 @@
     }
     function getMessage() {
         const username = document.getElementById("userInputBox").value;
-        if (username.trim() !== "") {
-            isRefreshing = true;
-            ws.send(JSON.stringify({action: "get", username: username}));
-        } else {
-            textArea.value = "username empty";
-        }
+        isRefreshing = true;
+        ws.send(JSON.stringify({action: "get", username: username.trim()}));
     }
     function refreshLoop() {
         if (!isRefreshing) {

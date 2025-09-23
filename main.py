@@ -537,11 +537,11 @@ async def runtime_error_exception_handler(request: Request, exc: RuntimeError):
 
 @app.get("/", response_class=HTMLResponse)
 async def homeUI(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "version": VERSION})
+    return templates.TemplateResponse("index.html", {"request": request, "version": VERSION, "apiurl": APIURL})
 
 @app.get("/login", response_class=HTMLResponse)
 async def loginUI(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse("login.html", {"request": request, "version": VERSION, "apiurl": APIURL})
 
 @app.post("/login-send")
 async def login_send(username: str = Form(...), password: str = Form(...)):
@@ -551,7 +551,7 @@ async def login_send(username: str = Form(...), password: str = Form(...)):
 
 @app.get("/register", response_class=HTMLResponse)
 async def registerUI(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
+    return templates.TemplateResponse("register.html", {"request": request, "version": VERSION, "apiurl": APIURL})
 
 @app.post("/register-send")
 async def register_send(username: str = Form(...), password: str = Form(...)):
@@ -567,7 +567,7 @@ async def mainUI(request: Request):
         return RedirectResponse(url="/login", status_code=302)
     if not tok:
         tok = create_token(userdat)
-    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"]})
+    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"], "apiurl": APIURL})
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -580,8 +580,9 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             jsondata = await ws.receive_json()
+            start = time.time()
             action = jsondata.get("action")
-            username = jsondata.get("username")
+            username = jsondata.get("username", None)
             message = jsondata.get("message", "")
             access_token_str = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
             if action == "send":
@@ -592,25 +593,26 @@ async def websocket_endpoint(ws: WebSocket):
                 entry = messageformatter(userdat["user"]["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
                 scrolled_text_data.append(entry)
             elif action == "get":
-                scrolled_text_data.clear()
-                messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
-                counter = int(messageid.split("-")[1])
-                usershash = messageid.split("-")[0]
-                for msgnum in range(1, counter + 1):
-                    msgid = f"{usershash}-{msgnum}"
-                    try:
-                        messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
-                    except:
-                        messagedata = {
-                            "message": "corrupted or not found",
-                            "sender": "unknown",
-                            "timestamp": None
-                        }
-                    plaintext = messagedata["message"]
-                    sender = messagedata["sender"]
-                    timestamp = messagedata["timestamp"]
-                    entry = messageformatter(sender, plaintext, timestamp)
-                    scrolled_text_data.append(entry)
+                if not username == None:
+                    scrolled_text_data.clear()
+                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                    counter = int(messageid.split("-")[1])
+                    usershash = messageid.split("-")[0]
+                    for msgnum in range(1, counter + 1):
+                        msgid = f"{usershash}-{msgnum}"
+                        try:
+                            messagedata = get_message(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
+                        except:
+                            messagedata = {
+                                "message": "corrupted or not found",
+                                "sender": "unknown",
+                                "timestamp": None
+                            }
+                        plaintext = messagedata["message"]
+                        sender = messagedata["sender"]
+                        timestamp = messagedata["timestamp"]
+                        entry = messageformatter(sender, plaintext, timestamp)
+                        scrolled_text_data.append(entry)
             # sorting before sending
             try:
                 sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
@@ -618,8 +620,13 @@ async def websocket_endpoint(ws: WebSocket):
                 sorted_lines = [entry["formatted"] for entry in scrolled_text_data]
                 sorted_lines += "sorting failed, see logs"
                 warnings.warn("message sorting failed, skipping sorting: {e}", RuntimeWarning)
+            stop = time.time()
+            apistat = [f"api url: {APIURL} is alive: {apiTunnelAlive()}", f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start)):.2f}", "MOTD: Have a nice day!"]
             for conn in connections:
-                await conn.send_json({"lines": sorted_lines})
+                await conn.send_json({
+                    "lines": sorted_lines,
+                    "apistat": apistat,
+                })
     except WebSocketDisconnect:
         connections.remove(ws)
         scrolled_text_data.clear()

@@ -9,15 +9,21 @@
     </head>
     <body>
         <header>
-            <a href="/">home</a><br><a href="https://github.com/bruh-moment-0/psm-client">github repo</a>
+            <a href="/">home</a>
+            <br>
+            <a href="https://github.com/bruh-moment-0/psm-client">github repo</a>
+            <br>
+            <a href="{{ apiurl }}">api url</a>
         </header>
         <main>
             {% if request.query_params.error %}
             <error>
-                <strong>Error:</strong> {{ request.query_params.error }}
+                <strong>error:</strong> {{ request.query_params.error }}
             </error>
             {% endif %}
-            {% block content %}{% endblock %}
+            <h3>{{ version }}</h3>
+            {% block content %}
+            {% endblock %}
         </main>
     </body>
 </html>
