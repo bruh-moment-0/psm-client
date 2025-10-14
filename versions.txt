@@ -1,5 +1,9 @@
 PSM CLIENT CHANGELIST
 
+CLIENT V1.10.4 WIP (built 20:15 GMT+0 14/10/2025)
+added settings page
+token expiry fixed
+
 CLIENT V1.10.3 WIP (built 20:15 GMT+0 14/10/2025)
 All local message saving works
 Fixed security problems from local message saving

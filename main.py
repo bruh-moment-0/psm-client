@@ -210,12 +210,15 @@ def is_tokenexpiring_soon(token: str) -> bool:
     return time.time() + TOKEN_BUFFER_TIME >= exp_time
 
 def ensure_valid_token(userdata: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
+    global tok
     if current_token and not is_tokenexpiring_soon(current_token):
         return current_token
     token_data = create_token(userdata)
+    tok = token_data  # UPDATE GLOBAL TOK HERE
     return token_data["tokens"]["access_token"]
 
 def make_authenticated_request(method: str, url: str, userdata: Dict[str, Any], current_token: str = None, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
+    global tok
     token = ensure_valid_token(userdata, current_token)
     headers = kwargs.get('headers', {})
     headers["Authorization"] = f"Bearer {token}"
@@ -236,6 +239,14 @@ def make_authenticated_request(method: str, url: str, userdata: Dict[str, Any], 
         elif method.upper() == 'POST':
             response = requests.post(url, **kwargs)
     return response
+
+def get_current_token(userdata: Dict[str, Any]) -> str:
+    global tok
+    if not tok:
+        tok = create_token(userdata)
+        return tok["tokens"]["access_token"]
+    current_token = tok["tokens"]["access_token"]
+    return ensure_valid_token(userdata, current_token)
 
 def get_challenge(username):
     r = requests.post(APIURL + AUTH_CHALLENGE, json={"username": username})
@@ -597,9 +608,24 @@ async def mainUI(request: Request):
     global tok
     if not userdat:
         return RedirectResponse(url="/login", status_code=302)
-    if not tok:
-        tok = create_token(userdat)
+    get_current_token(userdat)
     return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"], "apiurl": APIURL})
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settingsUI(request: Request):
+    global userdat
+    global tok
+    if not userdat:
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse("settings.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"], "apiurl": APIURL})
+
+@app.get("/logout", response_class=HTMLResponse)
+async def logoutUI(request: Request):
+    global userdat
+    global tok
+    userdat = None
+    tok = None
+    return RedirectResponse(url="/login", status_code=302)
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -607,8 +633,7 @@ async def websocket_endpoint(ws: WebSocket):
     global tok
     await ws.accept()
     connections.append(ws)
-    # send initial contents
-    await ws.send_json({"lines": [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]}) # pyright: ignore[reportArgumentType]
+    await ws.send_json({"lines": [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]})
     try:
         while True:
             jsondata = await ws.receive_json()
@@ -616,40 +641,43 @@ async def websocket_endpoint(ws: WebSocket):
             action = jsondata.get("action")
             username = jsondata.get("username", None)
             message = jsondata.get("message", "")
-            access_token_str = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
+            access_token_str = get_current_token(userdat) # pyright: ignore[reportArgumentType]
             if action == "send":
-                messagedata = send_message_persistent_storage(userdat, username, message, access_token_str)  # pyright: ignore[reportArgumentType]
+                messagedata = send_message_persistent_storage(userdat, username, message, access_token_str) # pyright: ignore[reportArgumentType]
                 if messagedata["status"] != "sent":
                     raise RuntimeError("message couldn't be sent")
                 timestamp = messagedata["timestamp"]
                 entry = messageformatter(userdat["user"]["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
                 scrolled_text_data.append(entry)
             elif action == "get":
-                if not username == None:
+                if username is not None:
                     scrolled_text_data.clear()
-                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)  # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False) # pyright: ignore[reportArgumentType, reportOptionalSubscript]
                     counter = int(messageid.split("-")[1])
                     usershash = messageid.split("-")[0]
                     for msgnum in range(1, counter + 1):
                         msgid = f"{usershash}-{msgnum}"
-                        messagedata = get_message_persistent_storage2(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
+                        messagedata = get_message_persistent_storage2(msgid, userdat, access_token_str) # pyright: ignore[reportArgumentType]
                         plaintext = messagedata["message"]
                         sender = messagedata["sender"]
                         timestamp = messagedata["timestamp"]
                         entry = messageformatter(sender, plaintext, timestamp)
                         scrolled_text_data.append(entry)
-            # sorting before sending
-            # its crazy how much that this fucking fails
-            # "stuff made here" incorrect
-            # "stuff FUCKED here" correct
             try:
-                sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])] # pyright: ignore[reportArgumentType]
+                sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]
             except Exception as e:
                 sorted_lines = [entry["formatted"] for entry in scrolled_text_data]
                 sorted_lines.append("sorting failed, see logs")
-                warnings.warn("message sorting failed, skipping sorting: {e}", RuntimeWarning)
+                warnings.warn(f"message sorting failed, skipping sorting: {e}", RuntimeWarning)
             stop = time.time()
-            apistat = [f"api url: {APIURL} is alive: {apiTunnelAlive()}", f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start)):.2f}", "MOTD: Have a nice day!"]
+            token_exp = tok.get("exp", 0) if tok else 0
+            time_until_exp = max(0, token_exp - time.time())
+            apistat = [
+                f"api url: {APIURL} is alive: {apiTunnelAlive()}", 
+                f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start)):.2f}",
+                f"token expires in: {time_until_exp:.0f}s",
+                "MOTD: Have a nice day!"
+            ]
             for conn in connections:
                 await conn.send_json({
                     "lines": sorted_lines,
