@@ -38,7 +38,7 @@ if NOTREADY:
     print("issue: get persistent writes shared secret")
     print(f"current version: {VERSION}")
     print("reminder, THIS FAILSAFE ONLY ACTIVATES IF THERE IS A BIG SECURITY PROBLEM!!!")
-    exit(1)
+    # exit(1)
 
 SALT_LENGTH = 16
 NONCE_LENGTH = 12
@@ -192,7 +192,7 @@ def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) 
     return plaintext.decode("utf-8")
 
 # === Token Management ===
-def check_token_expiration(token: str) -> Optional[int]:
+def check_tokenexpiration(token: str) -> Optional[int]:
     try:
         headers = {"Authorization": f"Bearer {token}"}
         r = requests.get(APIURL + AUTH_PROTECTED, headers=headers)
@@ -203,14 +203,14 @@ def check_token_expiration(token: str) -> Optional[int]:
     except:
         return None
 
-def is_token_expiring_soon(token: str) -> bool:
-    exp_time = check_token_expiration(token)
+def is_tokenexpiring_soon(token: str) -> bool:
+    exp_time = check_tokenexpiration(token)
     if exp_time is None:
         return True
     return time.time() + TOKEN_BUFFER_TIME >= exp_time
 
 def ensure_valid_token(userdata: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
-    if current_token and not is_token_expiring_soon(current_token):
+    if current_token and not is_tokenexpiring_soon(current_token):
         return current_token
     token_data = create_token(userdata)
     return token_data["tokens"]["access_token"]
@@ -455,7 +455,7 @@ def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str,
         "message_id": message_id,
         "status": "sent",
         "timestamp": response.get("timestamp"),
-        "token_exp": response.get("tokenexp"),
+        "tokenexp": response.get("tokenexp"),
         "sender": userdata["user"]["username"],
         "receiver": receiver_username,
         "sender_pk": userdata["user"]["publickey_kyber_b64"],
@@ -481,6 +481,7 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
         "nonce": nonce
     }
     send_data["payload"] = send_data.pop("encrypted_payload_for_storage")
+    send_data.pop("shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT")
     messagefp = os.path.join(MESSAGEDIR, f"{send_data['message_id']}-msg-V1-CLIENT.json")
     writejson(userfile, userfiledata)
     writejson(messagefp, send_data)
@@ -488,89 +489,72 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
         "message_id": send_data["message_id"],
         "status": "sent",
         "timestamp": send_data["timestamp"],
-        "token_exp": send_data["token_exp"],
+        "tokenexp": send_data["tokenexp"],
         "sender": userdata["user"]["username"],
         "receiver": receiver_username
     }
 
-def get_message(message_id: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
-    params = {"sendertoken": token}
-    r = requests.get(APIURL + MSG_GET + message_id, params=params)
-    r.raise_for_status()
-    response = r.json()
-    if not response.get("ok"):
-        raise RuntimeError(f"Failed to get message: {response}")
-    m = response["message"]
-    if m["receiver"] != userdata["user"]["username"]:
-        # sender is trying to get this text, so we gonna use the existing one
-        messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
-        userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.json")
-        userfiledata = readjson(userfile)
-        userkey = userdata["user"]["key"]
-        shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userfiledata["messages"][message_id]["blob"], userkey, userfiledata["messages"][message_id]["salt"], userfiledata["messages"][message_id]["nonce"])
-        # yes super optimized code best out there
-        local_send_data = readjson(messagefp)
-        plaintext = decrypt_message_payload(local_send_data["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT)
-        return {
-            "message_id": local_send_data["message_id"],
-            "sender": local_send_data["sender"],
-            "receiver": local_send_data["receiver"],
-            "message": plaintext,
-            "timestamp": local_send_data["timestamp"],
-            "token_exp": local_send_data["token_exp"]
-        }
-    else:
-        ciphertext_b64 = m["ciphertext"]
-        shared_secret_b64 = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"], ciphertext_b64)
-        plaintext = decrypt_message_payload(m["payload"], shared_secret_b64)
-        return {
-            "ciphertext_b64": m["ciphertext"],
-            "message_id": m["messageid"],
-            "sender": m["sender"],
-            "receiver": m["receiver"],
-            "message": plaintext,
-            "timestamp": m["timestamp"],
-            "token_exp": response["tokenexp"]
-        }
-
-def get_message_persistent_storage(message_id: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
     messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
     userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V1.json")
     userfiledata = readjson(userfile)
     userkey = userdata["user"]["key"]
+    params = {"sendertoken": token}
+    r = make_authenticated_request("GET", APIURL + MSG_GET + message_id, userdata, token, params=params)
+    # r = requests.get(APIURL + MSG_GET + message_id, params=params)
+    r.raise_for_status()
+    response = r.json()
+    if not response.get("ok"):
+        raise RuntimeError(f"failed to get message: {response}")
+    m = response["message"]
     if os.path.exists(messagefp):
-        local_data = readjson(messagefp)
-        enc_secret = userfiledata["messages"][message_id]
-        shared_secret_b64 = decryptAESGCM(enc_secret["blob"], userkey, enc_secret["salt"], enc_secret["nonce"])
-        plaintext = decrypt_message_payload(local_data["payload"], shared_secret_b64)
+        # we are trying to read a existing, saved, local file OR
+        # sender is trying to get this text, so we gonna use the existing one
+        shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userfiledata["messages"][message_id]["blob"], userkey, userfiledata["messages"][message_id]["salt"], userfiledata["messages"][message_id]["nonce"])
+        local_send_data = readjson(messagefp)
+        plaintext = decrypt_message_payload(local_send_data["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT)
         return {
-            "message_id": local_data["message_id"],
-            "sender": local_data["sender"],
-            "receiver": local_data["receiver"],
+            "message_id": local_send_data["message_id"],
+            "status": "get",
+            "sender": local_send_data["sender"],
+            "receiver": local_send_data["receiver"],
             "message": plaintext,
-            "timestamp": local_data["timestamp"],
-            "token_exp": local_data["token_exp"]
+            "timestamp": local_send_data["timestamp"],
+            "tokenexp": local_send_data["tokenexp"]
         }
     else:
-        get_data = get_message(message_id, userdata, token)
-        shared_secret_b64 = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"],get_data["ciphertext_b64"])
-        blob, salt, nonce = encryptAESGCM(shared_secret_b64, userkey)
-        userfiledata["messages"][get_data["message_id"]] = {
+        ciphertext_b64 = m["ciphertext"]
+        shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"], ciphertext_b64)
+        plaintext = decrypt_message_payload(m["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT)
+        userkey = userdata["user"]["key"]
+        (blob, salt, nonce) = encryptAESGCM(shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, userkey)
+        userfiledata["messages"][message_id] = {
             "blob": blob,
             "salt": salt,
             "nonce": nonce
         }
-        local_copy = {
-            "message_id": get_data["message_id"],
-            "sender": get_data["sender"],
-            "receiver": get_data["receiver"],
-            "payload": encrypt_message_payload(get_data["message"], shared_secret_b64),
-            "timestamp": get_data["timestamp"],
-            "token_exp": get_data["token_exp"]
-        }
+        messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V1-CLIENT.json")
         writejson(userfile, userfiledata)
-        writejson(messagefp, local_copy)
-        return get_data
+        local_send_data = {
+            "message_id": message_id,
+            "sender": m["sender"],
+            "receiver": m["receiver"],
+            "payload": m["payload"],
+            "timestamp": m["timestamp"],
+            "tokenexp": response["tokenexp"]
+        }
+        writejson(messagefp, local_send_data)
+        return {
+            "message_id": message_id,
+            "status": "get",
+            "message": plaintext,
+            "timestamp": m["timestamp"],
+            "sender": m["sender"],
+            "tokenexp": response["tokenexp"],
+            "message_id": m["messageid"],
+            "receiver": m["receiver"],
+            "sender": userdata["user"]["username"],
+        }
 
 # === client web server shit ===
 @app.exception_handler(RuntimeError)
@@ -648,15 +632,7 @@ async def websocket_endpoint(ws: WebSocket):
                     usershash = messageid.split("-")[0]
                     for msgnum in range(1, counter + 1):
                         msgid = f"{usershash}-{msgnum}"
-                        try:
-                            # PLEASE WORK PLEASE I BEG YOU PYTHON GODS
-                            messagedata = get_message_persistent_storage(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
-                        except:
-                            messagedata = {
-                                "message": "corrupted or not found",
-                                "sender": "unknown",
-                                "timestamp": None
-                            }
+                        messagedata = get_message_persistent_storage2(msgid, userdat, access_token_str)  # pyright: ignore[reportArgumentType]
                         plaintext = messagedata["message"]
                         sender = messagedata["sender"]
                         timestamp = messagedata["timestamp"]
@@ -689,8 +665,14 @@ def portused(port, host="127.0.0.1"):
 
 if __name__ == "__main__":
     import uvicorn
-    port = 8080
-    while portused(port):
-        port += 1
-    webbrowser.open_new(f"http://localhost:{port}") # lowkey takes longer to init the server startup so its right before it
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    while True:
+        port = 8080
+        while portused(port):
+            port += 1
+        webbrowser.open_new(f"http://localhost:{port}") # lowkey takes longer to init the server startup so its right before it
+        try:
+            uvicorn.run(app, host="0.0.0.0", port=port)
+            break
+        except:
+            print(f"port {port} is used, trying another...")
+            continue

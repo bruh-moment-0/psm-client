@@ -6,10 +6,10 @@ import json # you guessed it, the best db ever
 import os
 
 # Normally False but if this is set to True, better leave it be True...
-# ONLY FOR REALLY IMPORTANT PROBLEMS
-NOTREADY = True
+# ONLY FOR REALLY IMPORTANT SECURITY PROBLEMS
+NOTREADY = False
 
-VERSION = "CLIENT V1.10 WIP (built 20:15 GMT+0 23/09/2025)"
+VERSION = "CLIENT V1.10.3 WIP (built 20:15 GMT+0 14/10/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STORAGEDIR = os.path.join(BASEDIR, "storage")
 FILESDIR = os.path.join(STORAGEDIR, "files")
@@ -46,6 +46,7 @@ def writejson(filepath: str, data: Any, indent: int = 4) -> None:
 
 def readjson(filepath: str) -> dict:
     if not os.path.exists(filepath):
+        print(f"FP: {filepath} does not exist, readjson")
         data = {}
         writejson(filepath, data)
         return data

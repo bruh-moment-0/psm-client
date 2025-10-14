@@ -1,0 +1,11 @@
+PSM CLIENT CHANGELIST
+
+CLIENT V1.10.3 WIP (built 20:15 GMT+0 14/10/2025)
+All local message saving works
+Fixed security problems from local message saving
+There is a problem with token expiry but a fix is on the way
+
+CLIENT V1.10.2 WIP (built 20:15 GMT+0 23/09/2025) DO NOT USE
+Local message saving is in work
+Major security issue: shared secrets of saved messages were written in plaintext
+
