@@ -40,19 +40,15 @@
     }
     function getMessage() {
         const username = document.getElementById("userInputBox").value;
+        if (username.trim() === "") {refreshLoop();}
         if (!isRefreshing) {
             isRefreshing = true;
-            ws.send(JSON.stringify({action: "get", username: username.trim()})); // Uncaught TypeError: Cannot read properties of undefined (reading 'join') at ws.onmessage
+            ws.send(JSON.stringify({action: "get", username: username.trim()}));
         }
     }
     function refreshLoop() {
         if (refreshTimer) clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => {
-            getMessage();
-        }, 750);
-    }
-    function remove() {
-        ws.send(JSON.stringify({action: "removeaccount"}));
+        refreshTimer = setTimeout(() => {getMessage();}, 750);
     }
     ws.onopen = () => {
         refreshLoop();

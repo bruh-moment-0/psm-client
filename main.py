@@ -351,7 +351,7 @@ def load_skey(username: str, password: str) -> str:
         raise RuntimeError(f"decryption failed: {e}, password might be wrong or file might be corrupted")
 
 def create_user(username: str, password: str) -> Dict[str, Any]:
-    if os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.skey.json")) or os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.json")):
+    if os.path.exists(os.path.join(USERDIR, f"{username}_client-V1.json")):
         raise RuntimeError(f"registration failed: user exists on the clients storage")
     key = keydecode(create_skey(username, password))
     publickey_kyber, privatekey_kyber = generate_keypair()
@@ -393,6 +393,16 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
     writejson(os.path.join(USERDIR, f"{username}_client-V1.json"), data)
     data["user"]["privatekey_ed25519_obj"] = privatekey_ed25519 # pyright: ignore[reportArgumentType]
     data["user"]["publickey_ed25519_obj"] = publickey_ed25519 # pyright: ignore[reportArgumentType]
+    if os.path.exists(os.path.join(USERDIR, "userslist-V1.json")):
+        current = readjson(os.path.join(USERDIR, "userslist-V1.json"))
+        try:
+            current["users"].append(username)
+        except:
+            current["users"] = []
+            current["users"].append(username)
+    else:
+        current = {"users": [username]}
+    writejson(os.path.join(USERDIR, "userslist-V1.json"), current)
     return data
 
 def load_user(username: str, password: str) -> Dict[str, Any]:
@@ -562,9 +572,8 @@ def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], t
             "timestamp": m["timestamp"],
             "sender": m["sender"],
             "tokenexp": response["tokenexp"],
-            "message_id": m["messageid"],
+            "message_id_server": m["messageid"],
             "receiver": m["receiver"],
-            "sender": userdata["user"]["username"],
         }
 
 # === client web server shit ===
@@ -584,7 +593,10 @@ async def homeUI(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 async def loginUI(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "version": VERSION, "apiurl": APIURL})
+    options = readjson(os.path.join(USERDIR, "userslist-V1.json")).get("users")
+    if not options:
+        return RedirectResponse(url="/register", status_code=302)
+    return templates.TemplateResponse("login.html", {"request": request, "version": VERSION, "apiurl": APIURL, "options": options})
 
 @app.post("/login-send")
 async def login_send(username: str = Form(...), password: str = Form(...)):
@@ -594,7 +606,8 @@ async def login_send(username: str = Form(...), password: str = Form(...)):
 
 @app.get("/register", response_class=HTMLResponse)
 async def registerUI(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request, "version": VERSION, "apiurl": APIURL})
+    options = readjson(os.path.join(USERDIR, "userslist-V1.json")).get("users", ["no users on disk"])
+    return templates.TemplateResponse("register.html", {"request": request, "version": VERSION, "apiurl": APIURL, "options": options})
 
 @app.post("/register-send")
 async def register_send(username: str = Form(...), password: str = Form(...)):
@@ -631,6 +644,7 @@ async def logoutUI(request: Request):
 async def websocket_endpoint(ws: WebSocket):
     global userdat
     global tok
+    messages = {}
     await ws.accept()
     connections.append(ws)
     await ws.send_json({"lines": [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]})
@@ -646,9 +660,7 @@ async def websocket_endpoint(ws: WebSocket):
                 messagedata = send_message_persistent_storage(userdat, username, message, access_token_str) # pyright: ignore[reportArgumentType]
                 if messagedata["status"] != "sent":
                     raise RuntimeError("message couldn't be sent")
-                timestamp = messagedata["timestamp"]
-                entry = messageformatter(userdat["user"]["username"], message, timestamp) # pyright: ignore[reportOptionalSubscript]
-                scrolled_text_data.append(entry)
+                pass
             elif action == "get":
                 if username is not None:
                     scrolled_text_data.clear()
@@ -657,7 +669,11 @@ async def websocket_endpoint(ws: WebSocket):
                     usershash = messageid.split("-")[0]
                     for msgnum in range(1, counter + 1):
                         msgid = f"{usershash}-{msgnum}"
-                        messagedata = get_message_persistent_storage2(msgid, userdat, access_token_str) # pyright: ignore[reportArgumentType]
+                        if not messages.get(msgid):
+                            messagedata = get_message_persistent_storage2(msgid, userdat, access_token_str) # pyright: ignore[reportArgumentType]
+                            messages[msgid] = messagedata
+                        else:
+                            messagedata = messages[msgid]
                         plaintext = messagedata["message"]
                         sender = messagedata["sender"]
                         timestamp = messagedata["timestamp"]

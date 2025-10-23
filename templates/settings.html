@@ -2,12 +2,22 @@
 {% block content %}
 <h2>PSM CLIENT SERVER USER ACCOUNT SETTINGS CONTROL PAGE</h2>
 <h4>logged in as {{ username }}</h4>
+<pre>you can see your account on the API server bellow:</pre>
+<a href="{{ apiurl }}user/{{ username }}">see here</a>
 
+<br>
 <form action="/main" method="get">
     <button type="submit">go back to main messaging page</button>
+</form>
 
+<h4>BEWARE, DANGEROUS SETTINGS BELLOW.</h4>
+<br>
 <form action="/settings/remove" method="get">
-    <button type="submit">go back to main messaging page</button>
-<button onclick="remove()">Remove Account</button>
+    <button type="submit">remove account</button>
+</form>
 
+<br>
+<form action="/settings/change" method="get">
+    <button type="submit">change account password</button>
+</form>
 {% endblock %}
