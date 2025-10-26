@@ -7,52 +7,77 @@
 
 <textarea id="serverText" readonly></textarea>
 
-<textarea id="scrolledText" readonly></textarea>
-    <input type="text" id="msgInputBox" placeholder="enter message...">
-    <input type="text" id="userInputBox" placeholder="enter username...">
-    <button onclick="sendMessage()">Send</button>
-    <button onclick="getMessage()">Refresh</button>
+<div id="scrolledText" style="
+    width: 400px;
+    height: 300px;
+    border: 1px solid #555;
+    padding: 5px;
+    overflow-y: scroll;
+    background: #111;
+    color: white;
+    font-family: monospace;
+    white-space: pre-wrap;
+"></div>
+
+<input type="text" id="msgInputBox" placeholder="enter message...">
+<input type="text" id="userInputBox" placeholder="enter username...">
+<button onclick="sendMessage()">Send</button>
+<button onclick="getMessage()">Refresh</button>
 
 <script>
-    const ws = new WebSocket(`ws://${location.host}/ws`);
-    const scrolledText = document.getElementById("scrolledText");
-    const serverText = document.getElementById("serverText");
-    let isRefreshing = false;
-    let refreshTimer = null;
-    ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        scrolledText.value = data.lines.join("\n");
-        scrolledText.scrollTop = scrolledText.scrollHeight;
-        serverText.value = data.apistat.join("\n");
-        serverText.scrollTop = serverText.scrollHeight;
-        isRefreshing = false;
-        refreshLoop();
-    };
-    function sendMessage() {
-        const message = document.getElementById("msgInputBox").value;
-        const username = document.getElementById("userInputBox").value;
-        if (message.trim() !== "" && username.trim() !== "") {
-            ws.send(JSON.stringify({action: "send", username: username, message: message}));
-            document.getElementById("msgInputBox").value = "";
-        } else {
-            alert("username or message empty");
-        }
+const ws = new WebSocket(`ws://${location.host}/ws`);
+const scrolledText = document.getElementById("scrolledText");
+const serverText = document.getElementById("serverText");
+let isRefreshing = false;
+let refreshTimer = null;
+
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    scrolledText.innerHTML = data.lines
+        .map(line => `<div>${line}</div>`)
+        .join("");
+    scrolledText.scrollTop = scrolledText.scrollHeight;
+    serverText.value = data.apistat.join("\n");
+    serverText.scrollTop = serverText.scrollHeight;
+    isRefreshing = false;
+    refreshLoop();
+};
+
+function sendMessage() {
+    const message = document.getElementById("msgInputBox").value;
+    const username = document.getElementById("userInputBox").value;
+    if (message.trim() !== "" && username.trim() !== "") {
+        ws.send(JSON.stringify({
+            action: "send",
+            username: username,
+            message: message
+        }));
+        document.getElementById("msgInputBox").value = "";
+    } else {
+        alert("username or message empty");
     }
-    function getMessage() {
-        const username = document.getElementById("userInputBox").value;
-        if (username.trim() === "") {refreshLoop();}
-        if (!isRefreshing) {
-            isRefreshing = true;
-            ws.send(JSON.stringify({action: "get", username: username.trim()}));
-        }
+}
+
+function getMessage() {
+    const username = document.getElementById("userInputBox").value;
+    if (username.trim() === "") { refreshLoop(); }
+    if (!isRefreshing) {
+        isRefreshing = true;
+        ws.send(JSON.stringify({
+            action: "get",
+            username: username.trim()
+        }));
     }
-    function refreshLoop() {
-        if (refreshTimer) clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => {getMessage();}, 750);
-    }
-    ws.onopen = () => {
-        refreshLoop();
-    };
+}
+
+function refreshLoop() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => { getMessage(); }, 750);
+}
+
+ws.onopen = () => {
+    refreshLoop();
+};
 </script>
 
 {% endblock %}

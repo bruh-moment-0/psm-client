@@ -2,10 +2,11 @@
 {% block content %}
 <h2>REGISTER</h2>
 <pre>current users on disk:</pre>
-{% for option in options %}
-    <pre>{{ option }}</pre>
-    <br>
-{% endfor %}
+<ul>
+    {% for option in options %}
+        <li><pre>{{ option }}</pre></li>
+    {% endfor %}
+</ul>
 <form action="/register-send" method="post">
     <input name="username" placeholder="enter username">
     <input name="password" type="password" placeholder="enter password">

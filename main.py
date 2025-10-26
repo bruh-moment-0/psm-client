@@ -710,9 +710,14 @@ def portused(port, host="127.0.0.1"):
 if __name__ == "__main__":
     import uvicorn
     while True:
-        port = 8080
+        port = PORT_BASE
         while portused(port):
-            port += 1
+            if MULTIPLE_PORTS:
+                port += 1
+            else:
+                print(f"port {port} is used. Another instance is running. please run this script again when port {PORT_BASE} is available")
+                _ = input("press enter to exit: ")
+                exit(1)
         webbrowser.open_new(f"http://localhost:{port}") # lowkey takes longer to init the server startup so its right before it
         try:
             uvicorn.run(app, host="0.0.0.0", port=port)

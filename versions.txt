@@ -1,5 +1,11 @@
 PSM CLIENT CHANGELIST
 
+CLIENT v2.0.1 (built 20:30 GMT+0 26/10/2025)
+Better CSS (however its still very crude) and early dark mode support
+Early div implementations for adding html elements later (PSMIP 1 1)
+Some port usage rules added
+Aware of the bug where the dark mode does not consist over the webpages
+
 CLIENT v2.0.0 (built 11:10 GMT+0 22/10/2025)
 Better optimizations by using RAM
 Fixed sender of all messages being shown as the current user

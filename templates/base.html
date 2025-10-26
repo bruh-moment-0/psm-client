@@ -14,6 +14,14 @@
             <a href="https://github.com/bruh-moment-0/psm-client">github repo</a>
             <br>
             <a href="{{ apiurl }}">api url</a>
+            <br>
+            <button onclick="myFunction()">Toggle dark mode</button>
+            <script>
+            function myFunction() {
+            var element = document.body;
+            element.classList.toggle("dark-mode");
+            }
+            </script>
         </header>
         <main>
             {% if request.query_params.error %}
