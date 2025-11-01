@@ -1,5 +1,14 @@
 PSM CLIENT CHANGELIST
 
+API V1.1.9 STABLE (built 20:45 GMT+0 1/11/2025)
+enforcing kyber 768 key size
+
+CLIENT v2.0.2 (built 20:30 GMT+0 1/11/2025)
+added username selector (aka contacts)
+dark mode is consistent over the webpages
+increased security by switching to kyber ml kem 768 instead of kyber ml kem 512
+IMPORTANT: all old accounts has been deleted for this reason. api will later get an update to not allow any registery with a shorter key.
+
 CLIENT v2.0.1 (built 20:30 GMT+0 26/10/2025)
 Better CSS (however its still very crude) and early dark mode support
 Early div implementations for adding html elements later (PSMIP 1 1)

@@ -6,12 +6,12 @@ from link import * # custom lib for link/url control
 from data import * # custom lib for file control
 
 from fastapi import FastAPI, Request, HTTPException, Form, Depends, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305 # main encryption
-from pqcrypto.kem.ml_kem_512 import generate_keypair, encrypt, decrypt # kyber
+from pqcrypto.kem.ml_kem_768 import generate_keypair, encrypt, decrypt # kyber 768 ml kem
 from cryptography.hazmat.primitives.asymmetric import ed25519 # ed25519
 from cryptography.hazmat.primitives import serialization # ed25519 shit
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF # to do something i forgot right now
@@ -147,11 +147,11 @@ def decryptAESGCM(blob_b64: str, password: Union[str, bytes], salt_b64: str, non
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
     return cipher.decrypt_and_verify(ct, tag).decode("utf-8")
 
-def _derive_symmetric_key(shared_secret_bytes: bytes, info: bytes = b"psm-session-key") -> bytes:
+def _derive_symmetric_key(shared_secret_bytes: bytes, salt: bytes, info: bytes = b"psm-session-key") -> bytes:
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32, # 256-bit key for ChaCha20-Poly1305
-        salt=None, # optional; None is fine, but i will supply a per-session salt in the payload or something idk
+        salt=salt, # salt is added
         # this shit lowkey sucks ass but i have gotten so far to give up now
         info=info,
     )
@@ -172,18 +172,19 @@ def create_shared_secret(sender_private_key: bytes, receiver_public_key: str) ->
     shared_secret = decrypt(sender_private_key, receiver_public_key_bytes)
     return byte2b64(shared_secret)
 
-def encrypt_message_payload(message: str, shared_secret_b64: str) -> str:
+def encrypt_message_payload(message: str, shared_secret_b64: str) -> Tuple[str, str]:
     shared_secret_bytes = b642byte(shared_secret_b64)
-    key = _derive_symmetric_key(shared_secret_bytes)
+    salt = os.urandom(32)
+    key = _derive_symmetric_key(shared_secret_bytes, salt=salt)
     aead = ChaCha20Poly1305(key)
     nonce = os.urandom(12)
     ciphertext = aead.encrypt(nonce, message.encode("utf-8"), associated_data=None)
     combined = nonce + ciphertext
-    return base64.b64encode(combined).decode("utf-8")
+    return base64.b64encode(combined).decode("utf-8"), byte2b64(salt)
 
-def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str) -> str:
+def decrypt_message_payload(encrypted_payload_b64: str, shared_secret_b64: str, salt_b64: str) -> str:
     shared_secret_bytes = b642byte(shared_secret_b64)
-    key = _derive_symmetric_key(shared_secret_bytes)
+    key = _derive_symmetric_key(shared_secret_bytes, salt=b642byte(salt_b64))
     combined = base64.b64decode(encrypted_payload_b64)
     nonce = combined[:12]
     ciphertext = combined[12:]
@@ -381,6 +382,7 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
         "messages": {}
     }
     u = UserClassRegisterModel(username=username, publickey_kyber=data["user"]["publickey_kyber_b64"], publickey_ed25519=data["user"]["publickey_ed25519_b64"])
+    print(len(data["user"]["publickey_kyber_b64"]))
     resp = requests.post(APIURL + AUTH_REGISTER, json=u.model_dump()).json()
     if not resp.get("ok"):
         raise RuntimeError(f"registration failed: {resp}")
@@ -397,9 +399,14 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
         current = readjson(os.path.join(USERDIR, "userslist-V1.json"))
         try:
             current["users"].append(username)
+            current["contacts"][username] = []
+            current["contacts"][username].append(username)
         except:
             current["users"] = []
             current["users"].append(username)
+            current["contacts"] = {}
+            current["contacts"][username] = []
+            current["contacts"][username].append(username)
     else:
         current = {"users": [username]}
     writejson(os.path.join(USERDIR, "userslist-V1.json"), current)
@@ -456,7 +463,7 @@ def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str,
     receiver_public_key = receiver_info["data"]["publickey_kyber"]
     message_id = generate_message_id(userdata["user"]["username"], receiver_username, userdata, token)
     ciphertext_b64, shared_secret_b64 = encapsulate_shared_secret(receiver_public_key)
-    encrypted_payload = encrypt_message_payload(payload, shared_secret_b64)
+    encrypted_payload, hkdfsalt = encrypt_message_payload(payload, shared_secret_b64)
     msg_data = {
         "messageid": message_id,
         "sender": userdata["user"]["username"],
@@ -465,7 +472,8 @@ def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str,
         "sender_pk": userdata["user"]["publickey_kyber_b64"],
         "receiver_pk": receiver_public_key,
         "ciphertext": ciphertext_b64,
-        "payload": encrypted_payload
+        "payload": encrypted_payload,
+        "hkdfsalt": hkdfsalt
     }
     r = make_authenticated_request("POST", APIURL + MSG_SEND, userdata, token, json=msg_data)
     r.raise_for_status()
@@ -482,6 +490,7 @@ def send_message(userdata: Dict[str, Any], receiver_username: str, payload: str,
         "sender_pk": userdata["user"]["publickey_kyber_b64"],
         "receiver_pk": receiver_public_key,
         "payload": payload,
+        "hkdfsalt": hkdfsalt,
         "encrypted_payload_for_storage": encrypted_payload,
         "shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT": shared_secret_b64 # i think this might be important gang :sob: :wilted-rose:
     }
@@ -533,7 +542,7 @@ def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], t
         # sender is trying to get this text, so we gonna use the existing one
         shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userfiledata["messages"][message_id]["blob"], userkey, userfiledata["messages"][message_id]["salt"], userfiledata["messages"][message_id]["nonce"])
         local_send_data = readjson(messagefp)
-        plaintext = decrypt_message_payload(local_send_data["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT)
+        plaintext = decrypt_message_payload(local_send_data["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, local_send_data["hkdfsalt"])
         return {
             "message_id": local_send_data["message_id"],
             "status": "get",
@@ -546,7 +555,7 @@ def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], t
     else:
         ciphertext_b64 = m["ciphertext"]
         shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decapsulate_shared_secret(userdata["user"]["privatekey_kyber"], ciphertext_b64)
-        plaintext = decrypt_message_payload(m["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT)
+        plaintext = decrypt_message_payload(m["payload"], shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, m["hkdfsalt"])
         userkey = userdata["user"]["key"]
         (blob, salt, nonce) = encryptAESGCM(shared_secret_b64_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, userkey)
         userfiledata["messages"][message_id] = {
@@ -615,6 +624,30 @@ async def register_send(username: str = Form(...), password: str = Form(...)):
     userdat = create_user(username, password)
     return RedirectResponse(url="/login", status_code=302)
 
+@app.get("/contacts/{username}")
+async def get_contacts(username: str):
+    data = readjson(os.path.join(USERDIR, "userslist-V1.json"))
+    contacts = data.get("contacts", {}).get(username, [])
+    return JSONResponse({"contacts": contacts})
+
+@app.post("/contacts/add")
+async def add_contact(username: str = Form(...), new_contact: str = Form(...)):
+    data = readjson(os.path.join(USERDIR, "userslist-V1.json"))
+    contacts = data.setdefault("contacts", {}).setdefault(username, [])
+    if new_contact not in contacts:
+        contacts.append(new_contact)
+        writejson(os.path.join(USERDIR, "userslist-V1.json"), data)
+    return JSONResponse({"contacts": contacts})
+
+@app.post("/contacts/delete")
+async def delete_contact(username: str = Form(...), del_contact: str = Form(...)):
+    data = readjson(os.path.join(USERDIR, "userslist-V1.json"))
+    contacts = data.get("contacts", {}).get(username, [])
+    if del_contact in contacts:
+        contacts.remove(del_contact)
+        writejson(os.path.join(USERDIR, "userslist-V1.json"), data)
+    return JSONResponse({"contacts": contacts})
+
 @app.get("/main", response_class=HTMLResponse)
 async def mainUI(request: Request):
     global userdat
@@ -622,7 +655,9 @@ async def mainUI(request: Request):
     if not userdat:
         return RedirectResponse(url="/login", status_code=302)
     get_current_token(userdat)
-    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"], "apiurl": APIURL})
+    contacts_dict = readjson(os.path.join(USERDIR, "userslist-V1.json")).get("contacts", {})
+    contacts = contacts_dict.get(userdat["user"]["username"], [])
+    return templates.TemplateResponse("main.html", {"request": request, "version": VERSION, "username": userdat["user"]["username"], "apiurl": APIURL, "contacts": contacts})
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settingsUI(request: Request):

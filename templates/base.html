@@ -15,12 +15,23 @@
             <br>
             <a href="{{ apiurl }}">api url</a>
             <br>
-            <button onclick="myFunction()">Toggle dark mode</button>
+            <button onclick="darkmodefunc()">Toggle dark mode</button>
             <script>
-            function myFunction() {
-            var element = document.body;
-            element.classList.toggle("dark-mode");
-            }
+                document.addEventListener("DOMContentLoaded", function() {
+                    const element = document.body;
+                    if (localStorage.getItem("theme") === "dark") {
+                        element.classList.add("dark-mode");
+                    }
+                });
+                function darkmodefunc() {
+                    var element = document.body;
+                    element.classList.toggle("dark-mode");
+                    if (element.classList.contains("dark-mode")) {
+                        localStorage.setItem("theme", "dark");
+                    } else {
+                        localStorage.setItem("theme", "light");
+                    }
+                }
             </script>
         </header>
         <main>

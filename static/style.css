@@ -31,9 +31,13 @@ header {
     margin-bottom: 1rem;
 }
 
+#mainchatarea {
+    margin-left: 220px;
+}
+
 #serverText {
     width: 100%;
-    height: 70px;
+    height: 100px;
     resize: vertical;
     overflow-y: scroll;
     font-family: Consolas, "Courier New", monospace;
@@ -41,12 +45,32 @@ header {
 }
 
 #scrolledText {
-    width: 100%;
+    width: 600px;
     height: 300px;
     resize: vertical;
     overflow-y: scroll;
     font-family: Consolas, "Courier New", monospace;
     font-size: 14px;
+    border: 1px solid #555;
+    padding: 5px;
+    background: white;
+    color: black;
+    white-space: pre-wrap;
+}
+
+#msgInputBox {
+    width: 100%;
+}
+
+#sidebar {
+    float: left;
+    width: 200px;
+    padding-right: 20px;
+}
+
+#usernameList {
+    list-style-type: none;
+    padding-left: 0;
 }
 
 error {

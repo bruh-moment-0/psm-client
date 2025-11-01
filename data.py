@@ -9,7 +9,7 @@ import os
 # ONLY FOR REALLY IMPORTANT SECURITY PROBLEMS
 NOTREADY = False
 
-VERSION = "CLIENT V2.0.1 WIP (built 20:30 GMT+0 26/10/2025)"
+VERSION = "CLIENT V2.0.2 WIP (built 20:30 GMT+0 1/11/2025)"
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STORAGEDIR = os.path.join(BASEDIR, "storage")
 FILESDIR = os.path.join(STORAGEDIR, "files")
