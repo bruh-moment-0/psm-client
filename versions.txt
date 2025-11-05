@@ -1,5 +1,22 @@
 PSM CLIENT CHANGELIST
 
+API V2.1.0 STABLE (built 15:30 GMT+0 05/11/2025)
+made the client version 2.1.0 work 
+changed signing algorithms to ML-DSA-66 instead of ED25519
+in progress of adding connection signing
+IMPORTANT: all old accounts, messages and any data has been deleted.
+
+CLIENT V2.1.0 (built 12:30 GMT+0 5/11/2025)
+changed main encryption algorithm to AES-256-GCM instead of ChaCha20-Poly1305
+changed signing algorithms to ML-DSA-66 instead of ED25519
+using faster encryption algorithms
+changed the encryption library from pqcrypto to liboqs-python
+    due to this change any install of this version needs to come with the following apps:
+    git, cmake, microsoft visual code c++ development app
+in progress of adding connection signing
+added semi-local self messaging, fully local is on the way
+IMPORTANT: all old accounts, messages and any data has been deleted.
+
 API V1.1.9 STABLE (built 20:45 GMT+0 1/11/2025)
 enforcing kyber 768 key size
 
@@ -32,4 +49,3 @@ CLIENT V1.10.2 (built 20:15 GMT+0 23/09/2025) DO NOT USE
 Local message saving is in work
 Major security issue: shared secrets of saved messages were written in plaintext
 DO NOT USE - UNSAFE VERSION
-
