@@ -9,12 +9,7 @@
     </head>
     <body>
         <header>
-            <a href="/">home</a>
-            <br>
-            <a href="https://github.com/bruh-moment-0/psm-client">github repo</a>
-            <br>
-            <a href="{{ apiurl }}">api url</a>
-            <br>
+            <a href="/">home</a><br>
             <button onclick="darkmodefunc()">Toggle dark mode</button>
             <script>
                 document.addEventListener("DOMContentLoaded", function() {
@@ -44,5 +39,10 @@
             {% block content %}
             {% endblock %}
         </main>
+        <footer>
+            <p>Private Safe Messaging</p>
+            <a href="https://github.com/bruh-moment-0/psm-client">github repo</a>
+            <a href="{{ apiurl }}">api url</a>
+        </footer>
     </body>
 </html>

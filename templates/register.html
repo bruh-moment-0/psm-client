@@ -10,6 +10,35 @@
 <form action="/register-send" method="post">
     <input name="username" placeholder="enter username">
     <input name="password" type="password" placeholder="enter password">
+    <label for="timezone">select your timezone:</label>
+    <select id="timezone" name="timezone" required>
+        <option value="">-- select timezone --</option>
+        <option value="-12">GMT -12</option>
+        <option value="-11">GMT -11</option>
+        <option value="-10">GMT -10</option>
+        <option value="-9">GMT -9</option>
+        <option value="-8">GMT -8</option>
+        <option value="-7">GMT -7</option>
+        <option value="-6">GMT -6</option>
+        <option value="-5">GMT -5</option>
+        <option value="-4">GMT -4</option>
+        <option value="-3">GMT -3</option>
+        <option value="-2">GMT -2</option>
+        <option value="-1">GMT -1</option>
+        <option value="+0">GMT +0</option>
+        <option value="+1">GMT +1</option>
+        <option value="+2">GMT +2</option>
+        <option value="+3">GMT +3</option>
+        <option value="+4">GMT +4</option>
+        <option value="+5">GMT +5</option>
+        <option value="+6">GMT +6</option>
+        <option value="+7">GMT +7</option>
+        <option value="+8">GMT +8</option>
+        <option value="+9">GMT +9</option>
+        <option value="+10">GMT +10</option>
+        <option value="+11">GMT +11</option>
+        <option value="+12">GMT +12</option>
+    </select>
     <button type="submit">Register</button>
 </form>
 <form action="/login" method="get">

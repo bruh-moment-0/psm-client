@@ -1,5 +1,17 @@
 PSM CLIENT CHANGELIST
 
+API V2.1.1 STABLE (built 12:25 GMT+0 9/11/2025)
+better .env handling
+first implementations of ML-DSA for CLIENT-SERVER signing and verifing against MITM attacks
+server should be back online soon
+
+CLIENT V2.1.1 (built 12:25 GMT+0 9/11/2025)
+first implementations of custom timezones on message stamps
+better dark mode support
+work in progress for an installer
+first implementations of ML-DSA for CLIENT-SERVER signing and verifing against MITM attacks
+    still need to implement SERVER-CLIENT...
+
 API V2.1.0 STABLE (built 15:30 GMT+0 05/11/2025)
 made the client version 2.1.0 work 
 changed signing algorithms to ML-DSA-66 instead of ED25519

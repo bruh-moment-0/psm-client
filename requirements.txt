@@ -5,7 +5,6 @@ uvicorn
 fastapi
 requests
 pydantic
-websockets
 MarkupSafe
 argon2-cffi
 pycryptodome

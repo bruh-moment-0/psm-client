@@ -14,12 +14,13 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF # to do something i forgot right now
-from typing import Tuple, Dict, Any, Union, Optional # making pylance happy i guess
+from typing import Tuple, Dict, Any, Optional # making pylance happy i guess
 from cryptography.hazmat.primitives import hashes # hkdf stuff
 
 from pydantic import BaseModel
 from urllib.parse import quote # to make text url friendly
 
+from urllib.parse import urlparse
 import webbrowser # to open the webbrowser
 import requests # we gonna use this ALOT
 import datetime
@@ -44,6 +45,7 @@ STATICDIR = os.path.join(BASEDIR, "static")
 TEMPLATESDIR = os.path.join(BASEDIR, "templates")
 
 # i have no idea what these do but they make shit work so yes yes
+tok: Optional[Dict[str, Any]] = None # token
 scrolled_text_data: list[dict] = [] # shared buffer
 connections: list[WebSocket] = [] # connected clients
 
@@ -54,9 +56,10 @@ app.mount("/static", StaticFiles(directory=STATICDIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATESDIR)
 
 # === Functions ===
-def messageformatter(username: str, message: str, timestamp: str) -> dict:
+def messageformatter(username: str, message: str, timestamp: str, timezone: int) -> dict:
     try:
         dt = datetime.datetime.fromisoformat(timestamp)
+        dt = dt + datetime.timedelta(hours=timezone)
         formatted = f"[{dt.strftime('%d/%m/%Y %H:%M:%S')}] {username} > {message}"
     except Exception as e:
         dt = datetime.datetime.min
@@ -65,14 +68,6 @@ def messageformatter(username: str, message: str, timestamp: str) -> dict:
     return {"timestamp": dt, "formatted": formatted}
 
 # === Schemas ===
-class UserClassRegisterModel(BaseModel):
-    username: str
-    publickey_kyber: str
-    publickey_token: str
-    publickey_connection: str
-
-# i dont know why but i am not using any other models... weird...
-# edit (04/11/2025): i am finally using them (atleast currently MessageSendModel)
 class MessageSendModel(BaseModel):
     messageid: str
     sender: str
@@ -96,6 +91,26 @@ class MessageIDGENModel(BaseModel):
     sendertoken: str
     receiver: str
     update: bool
+
+class UserClassModel(BaseModel):
+    username: str
+    publickey_kyber: str
+    publickey_token: str
+    publickey_connection: str
+
+class TokenStart(BaseModel):
+    username: str
+
+class TokenFinish(BaseModel):
+    username: str
+    challenge_id: str
+    signature: str
+
+class UserClassRegisterModel(BaseModel):
+    username: str
+    publickey_kyber: str
+    publickey_token: str
+    publickey_connection: str
 
 # === Cryptography ===
 def _derive_symmetric_key(shared_secret_bytes: bytes, salt: bytes, info: bytes = b"psm-session-key") -> bytes:
@@ -130,10 +145,38 @@ def decrypt_message_payload(sharedsecret: bytes, payload_ciphertext_b64: str, pa
     return message
 
 # === Token Management ===
-def check_tokenexpiration(token: str) -> Optional[int]:
+def connection_signer_header(userdata: Dict[str, Any], method: str, url: str, body_dict: dict) -> str:
+    # create signature for X-Connection-Signature header
+    if not userdata or not userdata.get("ram", {}).get("connection_sign_obj"):
+        return "None"
+    parsed = urlparse(url)
+    path = parsed.path
+    # create deterministic signing payload
+    sign_payload = {
+        "method": method.upper(),
+        "path": path,
+        "body": body_dict
+    }
+    connection_signer = userdata["ram"]["connection_sign_obj"]
+    sign_str = json.dumps(sign_payload, sort_keys=True, separators=(',', ':'))
+    signature = byte2b64(sign(connection_signer, str2byte(sign_str)))
+    return signature
+
+def make_request(userdata: Dict[str, Any], method: str, url: str, **kwargs) -> requests.Response:
+    headers = kwargs.pop('headers', {}).copy()
+    body_dict = kwargs.get('json', {})
+    if body_dict:  # sign if there's a body
+        signature = connection_signer_header(userdata, method, url, body_dict)
+        headers['X-Connection-Signature'] = signature
+    kwargs['headers'] = headers
+    response = requests.request(method.upper(), url, **kwargs)
+    response.raise_for_status()
+    return response
+
+def check_tokenexpiration(userdata, token: str) -> Optional[int]:
     try:
         headers = {"Authorization": f"Bearer {token}"}
-        r = requests.get(APIURL + AUTH_PROTECTED, headers=headers)
+        r = make_request(userdata, "GET", APIURL + AUTH_PROTECTED, headers=headers)
         if r.status_code == 200:
             response = r.json()
             return response.get("exp")
@@ -141,31 +184,18 @@ def check_tokenexpiration(token: str) -> Optional[int]:
     except:
         return None
 
-def is_tokenexpiring_soon(token: str) -> bool:
-    exp_time = check_tokenexpiration(token)
+def is_tokenexpiring_soon(userdata, token: str) -> bool:
+    exp_time = check_tokenexpiration(userdata, token)
     if exp_time is None:
         return True
     return time.time() + TOKEN_BUFFER_TIME >= exp_time
 
 def ensure_valid_token(userdata: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
     global tok
-    if current_token and not is_tokenexpiring_soon(current_token):
+    if current_token and not is_tokenexpiring_soon(userdata, current_token):
         return current_token
-    token_data = create_token(userdata)
-    tok = token_data  # UPDATE GLOBAL TOK HERE
-    return token_data["tokens"]["access_token"]
-
-def make_request(method: str, url: str, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
-    headers = kwargs.get('headers', {})
-    kwargs['headers'] = headers
-    if method.upper() == 'GET':
-        response = requests.get(url, **kwargs)
-    elif method.upper() == 'POST':
-        response = requests.post(url, **kwargs)
-    else:
-        raise ValueError(f"Unsupported HTTP method: {method}")
-    response.raise_for_status()
-    return response
+    tok = create_token(userdata) # UPDATE GLOBAL TOK HERE
+    return tok["tokens"]["access_token"]
 
 def make_authenticated_request(method: str, url: str, userdata: Dict[str, Any], current_token: str = None, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
     global tok
@@ -173,21 +203,16 @@ def make_authenticated_request(method: str, url: str, userdata: Dict[str, Any], 
     headers = kwargs.get('headers', {})
     headers["Authorization"] = f"Bearer {token}"
     kwargs['headers'] = headers
-    if method.upper() == 'GET':
-        response = requests.get(url, **kwargs)
-    elif method.upper() == 'POST':
-        response = requests.post(url, **kwargs)
+    if method in ["GET", "POST"]:
+        response = make_request(userdata, method, url, **kwargs)
     else:
         raise ValueError(f"Unsupported HTTP method: {method}")
     if response.status_code == 401:
-        print("Token failed or expired. Forcing a new token and retrying once...")
+        print("token failed or expired. forcing a new token and retrying once...")
         fresh_token = ensure_valid_token(userdata, None) # pyright: ignore[reportArgumentType]
         headers["Authorization"] = f"Bearer {fresh_token}"
         kwargs['headers'] = headers
-        if method.upper() == 'GET':
-            response = requests.get(url, **kwargs)
-        elif method.upper() == 'POST':
-            response = requests.post(url, **kwargs)
+        response = make_request(userdata, method, url, **kwargs)
     response.raise_for_status()
     return response
 
@@ -199,67 +224,28 @@ def get_current_token(userdata: Dict[str, Any]) -> str:
     current_token = tok["tokens"]["access_token"]
     return ensure_valid_token(userdata, current_token)
 
-def get_challenge(username):
-    response = make_request("POST", url=APIURL+AUTH_CHALLENGE, json={"username": username}).json()
+def get_challenge(userdata: Dict[str, Any], username: str)  -> Tuple[str, str]:
+    response = make_request(userdata, "POST", url=APIURL+AUTH_CHALLENGE, json={"username": username}).json()
     return response["challenge_id"], response["challenge"]
 
-def respond_challenge(user, challenge_str: str):
-    sign_obj = user["ram"]["sign_token_obj"]
+def respond_challenge(userdata: Dict[str, Any], challenge_str: str):
+    sign_obj = userdata["ram"]["sign_token_obj"]
     sig_bytes = sign(sign_obj, str2byte(challenge_str))
     return byte2b64(sig_bytes)
 
-def get_token(username, challenge_id, signature):
-    return make_request("POST", url=APIURL+AUTH_RESPOND, json={"username": username, "challenge_id": challenge_id, "signature": signature}).json()
+def get_token(userdata: Dict[str, Any], username: str, challenge_id, signature):
+    return make_request(userdata, "POST", url=APIURL+AUTH_RESPOND, json={"username": username, "challenge_id": challenge_id, "signature": signature}).json()
 
-def create_token(userdata: Dict[str, Any]):
-    cid, challenge = get_challenge(userdata["user"]["username"])
+def create_token(userdata: Dict[str, Any]) -> Dict[str, str]:
+    cid, challenge = get_challenge(userdata, userdata["user"]["username"])
     sig = respond_challenge(userdata, challenge) # pass only the string
-    tokens = get_token(userdata["user"]["username"], cid, sig)
+    tokens = get_token(userdata, userdata["user"]["username"], cid, sig)
     r = requests.get(APIURL + AUTH_PROTECTED, headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
     data = {
         "tokens": tokens,
         "exp": r["exp"]
     }
     return data
-
-# === Helpers ===
-def removeaccount():
-    global userdat
-    global tok
-    if not userdat:
-        raise RuntimeError("not logged in. cannot remove account.")
-    username = userdat["user"]["username"]
-    access_token = tok["tokens"]["access_token"]  # pyright: ignore[reportOptionalSubscript]
-    try:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        response = requests.delete(APIURL + AUTH_REMOVE, headers=headers)
-        if response.status_code != 200:
-            raise RuntimeError(f"server-side account removal failed code: {response.status_code} details: {response.text}")
-    except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"error sending account removal request to server: {e}")
-    if "messages" in userdat and isinstance(userdat["messages"], dict):
-        for msg_id in list(userdat["messages"].keys()):
-            message_file = os.path.join(MESSAGEDIR, f"{msg_id}-msg-V2-CLIENT.json")
-            if os.path.exists(message_file):
-                try:
-                    os.remove(message_file)
-                except OSError as e:
-                    raise RuntimeError(f"failed to remove message file {message_file}: {e}")
-    user_data_file = os.path.join(USERDIR, f"{username}_client-V2.json")
-    if os.path.exists(user_data_file):
-        try:
-            os.remove(user_data_file)
-        except OSError as e:
-            raise RuntimeError(f"failed to remove user data file {user_data_file}: {e}")
-    skey_file = os.path.join(USERDIR, f"{username}_client-V2.skey.json")
-    if os.path.exists(skey_file):
-        try:
-            os.remove(skey_file)
-        except OSError as e:
-            raise RuntimeError(f"failed to remove skey file {skey_file}: {e}")
-    userdat = None
-    tok = None
-    return {"ok": True, "message": f"account '{username}' removed successfully (server + client)"}
 
 def create_skey(username: str, password: str) -> bytes:
     key = keygen()
@@ -295,7 +281,7 @@ def load_skey(username: str, password: str) -> bytes:
     except Exception as e:
         raise RuntimeError(f"decryption failed: {e}, password might be wrong or file might be corrupted")
 
-def create_user(username: str, password: str) -> Dict[str, Any]:
+def create_user(username: str, password: str, tz: int) -> Dict[str, Any]:
     if os.path.exists(os.path.join(USERDIR, f"{username}_client-V2.json")):
         raise RuntimeError(f"registration failed: user exists on the clients storage")
     key = create_skey(username, password)
@@ -312,7 +298,7 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
     (privatekey_sign_token_ciphertext, privatekey_sign_token_tag, privatekey_sign_token_salt, privatekey_sign_token_nonce) = encryptAESGCM(key, privatekey_sign_token, human=False)
     (privatekey_sign_connection_ciphertext, privatekey_sign_connection_tag, privatekey_sign_connection_salt, privatekey_sign_connection_nonce) = encryptAESGCM(key, privatekey_sign_connection, human=False)
     u = UserClassRegisterModel(username=username, publickey_kyber=publickey_kyber_b64, publickey_token=publickey_sign_token_b64, publickey_connection=publickey_sign_connection_b64)
-    response = make_request("POST", APIURL + AUTH_REGISTER, json=u.model_dump()).json()
+    response = make_request(userdata={}, method="POST", url=APIURL + AUTH_REGISTER, json=u.model_dump()).json()
     if not response.get("ok"):
         raise RuntimeError(f"registration failed: {response}")
     response = requests.get(APIURL + GET_USER + username).json()
@@ -324,6 +310,7 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
             "ver": VERSION,
             "usertype": response["data"]["usertype"],
             "creation": response["data"]["creation"],
+            "tz": tz,
             "keys": {
                 "publickey_kyber_b64": publickey_kyber_b64,
                 "publickey_sign_token_b64": publickey_sign_token_b64,
@@ -372,7 +359,7 @@ def create_user(username: str, password: str) -> Dict[str, Any]:
 def load_user(username: str, password: str) -> Dict[str, Any]:
     if not os.path.exists(os.path.join(USERDIR, f"{username}_client-V2.skey.json")) or not os.path.exists(os.path.join(USERDIR, f"{username}_client-V2.json")):
         raise RuntimeError("loading failed: clients files dont exist on the clients storage")
-    response = make_request(method="GET", url=APIURL + GET_USER + username).json()
+    response = make_request(userdata={}, method="GET", url=APIURL + GET_USER + username).json()
     if not response.get("ok"):
         raise RuntimeError(f"loading failed: {resp}")
     key = load_skey(username, password)
@@ -387,7 +374,7 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
     publickey_sign_connection = b642byte(data["user"]["keys"]["publickey_sign_connection_b64"])
     kyber_obj = kem_obj_create(privkey=privatekey_kyber)
     sign_token_obj = sign_obj_create(privkey=privatekey_sign_token)
-    connection_token_obj = sign_obj_create(privkey=privatekey_sign_connection)
+    connection_sign_obj = sign_obj_create(privkey=privatekey_sign_connection)
     data["ram"] = {}
     data["ram"]["publickey_kyber"] = publickey_kyber
     data["ram"]["publickey_sign_token"] = publickey_sign_token
@@ -397,18 +384,18 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
     data["ram"]["privatekey_sign_connection"] = privatekey_sign_connection
     data["ram"]["kyber_obj"] = kyber_obj
     data["ram"]["sign_token_obj"] = sign_token_obj
-    data["ram"]["connection_token_obj"] = connection_token_obj
+    data["ram"]["connection_sign_obj"] = connection_sign_obj
     data["ram"]["key"] = key
     return data
 
 # === Messaging Functions ===
 # > creates "Cryptography" header
-# > puts messaging encryption uhnder a diffrent header
+# > puts messaging encryption under a diffrent header
 # shit ass programming time
 # (update on 18/09/2025 fixed this shit ass programming skill issue)
 def generate_message_id(sender: str, receiver: str, userdata: Dict[str, Any], token: str = None, update: bool = True) -> str: # pyright: ignore[reportArgumentType]
-    data = {"sender": sender, "receiver": receiver, "update": update}
-    response = make_authenticated_request("GET", APIURL + MSG_GET_ID, userdata, token, params=data).json()
+    idgen = MessageIDGENModel(sender=sender, sendertoken=token, receiver=receiver, update=update)
+    response = make_authenticated_request("POST", APIURL + MSG_GET_ID, userdata, token, json=idgen.model_dump()).json()
     if not response.get("ok"):
         raise RuntimeError(f"Failed to generate message ID: {response}")
     return response["msgid"]
@@ -573,9 +560,6 @@ def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], u
             "tokenexp": local_send_data["tokenexp"]
         }
 
-
-
-
 # === client web server shit ===
 @app.exception_handler(RuntimeError)
 async def runtime_error_exception_handler(request: Request, exc: RuntimeError):
@@ -610,9 +594,9 @@ async def registerUI(request: Request):
     return templates.TemplateResponse("register.html", {"request": request, "version": VERSION, "apiurl": APIURL, "options": options})
 
 @app.post("/register-send")
-async def register_send(username: str = Form(...), password: str = Form(...)):
+async def register_send(username: str = Form(...), password: str = Form(...), timezone: str = Form(...)):
     global userdat
-    userdat = create_user(username, password)
+    userdat = create_user(username, password, int(timezone))
     return RedirectResponse(url="/login", status_code=302)
 
 @app.get("/contacts/{username}")
@@ -703,7 +687,7 @@ async def websocket_endpoint(ws: WebSocket):
                         plaintext = messagedata["message"]
                         sender = messagedata["sender"]
                         timestamp = messagedata["timestamp"]
-                        entry = messageformatter(sender, plaintext, timestamp)
+                        entry = messageformatter(sender, plaintext, timestamp, timezone=userdat["user"]["tz"]) # pyright: ignore[reportOptionalSubscript]
                         scrolled_text_data.append(entry)
             try:
                 sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]
@@ -716,7 +700,7 @@ async def websocket_endpoint(ws: WebSocket):
             time_until_exp = max(0, token_exp - time.time())
             apistat = [
                 f"api url: {APIURL} is alive: {apiTunnelAlive()}", 
-                f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start)):.2f}",
+                f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start+0.001)):.2f}",
                 f"token expires in: {time_until_exp:.0f}s",
                 "MOTD: Have a nice day!"
             ]
