@@ -7,6 +7,15 @@
 <pre>you can see your account on the API server bellow:</pre>
 <a href="{{ apiurl }}user/{{ username }}">see here</a>
 
+<form action="/settings/remove" method="get">
+    <label>you can manage your timezone settings bellow...</label>
+    <button type="submit">manage my timezone</button>
+</form>
+<form action="/settings/dev" method="get">
+    <label>only for debuging</label>
+    <button type="submit">enable dev mode</button>
+</form>
+
 <h4>BEWARE, DANGEROUS SETTINGS BELLOW.</h4>
 <form action="/settings/remove" method="get">
     <button type="submit">remove account</button>
@@ -14,4 +23,6 @@
 <form action="/settings/change" method="get">
     <button type="submit">change account password</button>
 </form>
+
+
 {% endblock %}

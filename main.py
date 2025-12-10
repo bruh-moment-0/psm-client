@@ -3,77 +3,72 @@
 # or atleast thats my speculation ofc
 
 # custom libs
-from quantum import oqs, sign_obj_create, kem_obj_create, create_key_pair, sign, verify, encap, decap
+from const import * # constants
+from quantum import sign_obj_create, kem_obj_create, create_key_pair # post quantum custom lib based on liboqs-python
+# if you are reading this you acknowledge that liboqs-python is fire but installing it is ass.
 from aes256 import keygen, encryptAESGCM, decryptAESGCM # AES256-GCM custom lib
-from link import * # custom lib for link/url control
+from encrypt import * # custom lib for encryption
 from data import * # custom lib for file control
-
-from fastapi import FastAPI, Request, HTTPException, Form, Depends, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from connect import * # custom lib for connecting
+from fastapi import FastAPI, Request, Form, status, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF # to do something i forgot right now
-from typing import Tuple, Dict, Any, Optional # making pylance happy i guess
-from cryptography.hazmat.primitives import hashes # hkdf stuff
+# from cryptography.hazmat.primitives.kdf.hkdf import HKDF # to do something i forgot right now
+from typing import Dict, Any # making pylance happy i guess
+# from cryptography.hazmat.primitives import hashes # hkdf stuff
 
 from pydantic import BaseModel
-from urllib.parse import quote # to make text url friendly
 
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse, parse_qs, urlunparse, quote, unquote
+from zoneinfo import ZoneInfo
+from io import BytesIO
 import webbrowser # to open the webbrowser
-import requests # we gonna use this ALOT
 import datetime
+import hashlib
 import warnings
 import socket
 import time
 
+# all this just to get the path of a file :wilted-rose:
+import wx # gui system
+import asyncio # for async gui
+from concurrent.futures import ThreadPoolExecutor # for threading the gui
+
 # importing the whole pypi ass
 
 if NOTREADY:
-    print("code is NOTREADY for usage for now, due to security concerns. please use an older version until this version is fixed.")
-    print("issue: get persistent writes shared secret")
+    print("code is NOT READY for usage for now, due to security concerns. please use an older version until this version is fixed.")
+    print("current issue: None")
     print(f"current version: {VERSION}")
-    print("reminder, THIS FAILSAFE ONLY ACTIVATES IF THERE IS A BIG SECURITY PROBLEM!!!")
-    # exit(1)
+    print("REMINDER, THIS FAILSAFE ONLY ACTIVATES IF THERE IS A BIG SECURITY PROBLEM!")
+    print("DO NOT TAMPER THE CODE TO BYPASS THIS!")
+    _ = input("press ENTER to exit")
+    exit(1)
+else:
+    print("system init complete. please wait...")
 
-
-KDF_ITERATIONS = 100_000
-TOKEN_BUFFER_TIME = 60 # get new token 60 seconds before expiration
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 STATICDIR = os.path.join(BASEDIR, "static")
 TEMPLATESDIR = os.path.join(BASEDIR, "templates")
 
 # i have no idea what these do but they make shit work so yes yes
-tok: Optional[Dict[str, Any]] = None # token
 scrolled_text_data: list[dict] = [] # shared buffer
 connections: list[WebSocket] = [] # connected clients
 
-userdat = None
+executor = ThreadPoolExecutor(max_workers=4)
+userdat = {}
 tok = None
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATICDIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATESDIR)
-
-# === Functions ===
-def messageformatter(username: str, message: str, timestamp: str, timezone: int) -> dict:
-    try:
-        dt = datetime.datetime.fromisoformat(timestamp)
-        dt = dt + datetime.timedelta(hours=timezone)
-        formatted = f"[{dt.strftime('%d/%m/%Y %H:%M:%S')}] {username} > {message}"
-    except Exception as e:
-        dt = datetime.datetime.min
-        formatted = f"[unknown-time] {username} > {message}"
-        warnings.warn(f"WARNING: sorting failed on 'messageformatter': {e}, data: {username} {message} {timestamp}")
-    return {"timestamp": dt, "formatted": formatted}
 
 # === Schemas ===
 class MessageSendModel(BaseModel):
     messageid: str
     sender: str
     receiver: str
-    sender_pk: str
-    receiver_pk: str
     ciphertext: str
     payload_ciphertext: str
     payload_tag: str
@@ -112,141 +107,68 @@ class UserClassRegisterModel(BaseModel):
     publickey_token: str
     publickey_connection: str
 
-# === Cryptography ===
-def _derive_symmetric_key(shared_secret_bytes: bytes, salt: bytes, info: bytes = b"psm-session-key") -> bytes:
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32, # 256-bit key for ChaCha20-Poly1305
-        salt=salt, # salt is added
-        # this shit lowkey sucks ass but i have gotten so far to give up now
-        info=info,
-    )
-    return hkdf.derive(shared_secret_bytes)
-
-def encapsulate_shared_secret(kemobj: oqs.KeyEncapsulation, receiver_public_key_b64: str) -> Tuple[str, bytes]:
-    publickey = b642byte(receiver_public_key_b64)
-    ciphertext, sharedsecret = encap(kemobj, publickey)
-    return byte2b64(ciphertext), sharedsecret
-
-def decapsulate_shared_secret(kemobj: oqs.KeyEncapsulation, ciphertext_b64: str) -> bytes:
-    ciphertext = b642byte(ciphertext_b64)
-    sharedsecret = decap(kemobj, ciphertext)
-    return sharedsecret
-
-def encrypt_message_payload(sharedsecret: bytes, message: str) -> Tuple[str, str, str, str, str]:
-    salt = os.urandom(32)
-    key = _derive_symmetric_key(sharedsecret, salt=salt)
-    (payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64) = encryptAESGCM(key, str2byte(message), human=False)
-    return payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64, byte2b64(salt)
-
-def decrypt_message_payload(sharedsecret: bytes, payload_ciphertext_b64: str, payload_tag_b64: str, payload_salt_b64: str, payload_nonce_b64: str, salt_b64: str) -> bytes:
-    key = _derive_symmetric_key(sharedsecret, salt=b642byte(salt_b64))
-    message = decryptAESGCM(key, payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64, human=False)
-    return message
-
-# === Token Management ===
-def connection_signer_header(userdata: Dict[str, Any], method: str, url: str, body_dict: dict) -> str:
-    # create signature for X-Connection-Signature header
-    if not userdata or not userdata.get("ram", {}).get("connection_sign_obj"):
-        return "None"
-    parsed = urlparse(url)
-    path = parsed.path
-    # create deterministic signing payload
-    sign_payload = {
-        "method": method.upper(),
-        "path": path,
-        "body": body_dict
-    }
-    connection_signer = userdata["ram"]["connection_sign_obj"]
-    sign_str = json.dumps(sign_payload, sort_keys=True, separators=(',', ':'))
-    signature = byte2b64(sign(connection_signer, str2byte(sign_str)))
-    return signature
-
-def make_request(userdata: Dict[str, Any], method: str, url: str, **kwargs) -> requests.Response:
-    headers = kwargs.pop('headers', {}).copy()
-    body_dict = kwargs.get('json', {})
-    if body_dict:  # sign if there's a body
-        signature = connection_signer_header(userdata, method, url, body_dict)
-        headers['X-Connection-Signature'] = signature
-    kwargs['headers'] = headers
-    response = requests.request(method.upper(), url, **kwargs)
-    response.raise_for_status()
-    return response
-
-def check_tokenexpiration(userdata, token: str) -> Optional[int]:
+# === Helper Functions ===
+def get_filepath_sync(title: str) -> str:
     try:
-        headers = {"Authorization": f"Bearer {token}"}
-        r = make_request(userdata, "GET", APIURL + AUTH_PROTECTED, headers=headers)
-        if r.status_code == 200:
-            response = r.json()
-            return response.get("exp")
-        return None
-    except:
-        return None
+        app = wx.App(False)
+        dialog = wx.FileDialog(
+            None,
+            message=title,
+            defaultDir="",
+            defaultFile="",
+            wildcard="All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+        )
+        dialog.SetWindowStyle(dialog.GetWindowStyle() | wx.STAY_ON_TOP)
+        filepath = ""
+        if dialog.ShowModal() == wx.ID_OK:
+            filepath = dialog.GetPath()
+        dialog.Destroy()
+        app.Destroy()
+        return filepath
+    except Exception as e:
+        print(f"file dialog error: {e}")
+        return ""
 
-def is_tokenexpiring_soon(userdata, token: str) -> bool:
-    exp_time = check_tokenexpiration(userdata, token)
-    if exp_time is None:
-        return True
-    return time.time() + TOKEN_BUFFER_TIME >= exp_time
+async def get_filepath_async(title: str) -> str:
+    loop = asyncio.get_event_loop()
+    filepath = await loop.run_in_executor(executor, get_filepath_sync, title)
+    return filepath
 
-def ensure_valid_token(userdata: Dict[str, Any], current_token: str = None) -> str: # pyright: ignore[reportArgumentType]
-    global tok
-    if current_token and not is_tokenexpiring_soon(userdata, current_token):
-        return current_token
-    tok = create_token(userdata) # UPDATE GLOBAL TOK HERE
-    return tok["tokens"]["access_token"]
+def get_timezone_offset_hours(tz_name: str) -> float:
+    now = datetime.datetime.now(ZoneInfo(tz_name))
+    offset = now.utcoffset()
+    if offset is None:
+        return 0.0
+    return offset.total_seconds() / 3600
 
-def make_authenticated_request(method: str, url: str, userdata: Dict[str, Any], current_token: str = None, **kwargs) -> requests.Response: # pyright: ignore[reportArgumentType]
-    global tok
-    token = ensure_valid_token(userdata, current_token)
-    headers = kwargs.get('headers', {})
-    headers["Authorization"] = f"Bearer {token}"
-    kwargs['headers'] = headers
-    if method in ["GET", "POST"]:
-        response = make_request(userdata, method, url, **kwargs)
+def messageformatter(username: str, message: str, timestamp: str, timezone: int) -> dict:
+    try:
+        dt = datetime.datetime.fromisoformat(timestamp)
+        dt = dt + datetime.timedelta(hours=timezone)
+        formatted = dt.strftime('%d/%m/%Y %H:%M:%S')
+    except Exception as e:
+        dt = datetime.datetime.min
+        formatted = "unknown-time"
+        warnings.warn(f"WARNING: sorting failed on 'messageformatter': {e}, data: {username} {message} {timestamp}")
+    return {"sender": username, "message": message, "timestamp": timestamp, "formatted_time": formatted}
+
+def generate_message_id_local(username: str, update: bool) -> str:
+    chathash = hashlib.sha256("LOCAL".join([username, username]).encode()).hexdigest()
+    counter_file = os.path.join(MESSAGECOUNTERDIR, f"{chathash}-V1.json")
+    if os.path.exists(counter_file):
+        data = readjson(counter_file)
+        counter = data.get("counter", 0)
     else:
-        raise ValueError(f"Unsupported HTTP method: {method}")
-    if response.status_code == 401:
-        print("token failed or expired. forcing a new token and retrying once...")
-        fresh_token = ensure_valid_token(userdata, None) # pyright: ignore[reportArgumentType]
-        headers["Authorization"] = f"Bearer {fresh_token}"
-        kwargs['headers'] = headers
-        response = make_request(userdata, method, url, **kwargs)
-    response.raise_for_status()
-    return response
+        data = {"user": username, "counter": 0}
+        counter = 0
+    if update:
+        counter += 1
+        data["counter"] = counter
+        writejson(counter_file, data)
+    return f"{chathash}-{counter}"
 
-def get_current_token(userdata: Dict[str, Any]) -> str:
-    global tok
-    if not tok:
-        tok = create_token(userdata)
-        return tok["tokens"]["access_token"]
-    current_token = tok["tokens"]["access_token"]
-    return ensure_valid_token(userdata, current_token)
-
-def get_challenge(userdata: Dict[str, Any], username: str)  -> Tuple[str, str]:
-    response = make_request(userdata, "POST", url=APIURL+AUTH_CHALLENGE, json={"username": username}).json()
-    return response["challenge_id"], response["challenge"]
-
-def respond_challenge(userdata: Dict[str, Any], challenge_str: str):
-    sign_obj = userdata["ram"]["sign_token_obj"]
-    sig_bytes = sign(sign_obj, str2byte(challenge_str))
-    return byte2b64(sig_bytes)
-
-def get_token(userdata: Dict[str, Any], username: str, challenge_id, signature):
-    return make_request(userdata, "POST", url=APIURL+AUTH_RESPOND, json={"username": username, "challenge_id": challenge_id, "signature": signature}).json()
-
-def create_token(userdata: Dict[str, Any]) -> Dict[str, str]:
-    cid, challenge = get_challenge(userdata, userdata["user"]["username"])
-    sig = respond_challenge(userdata, challenge) # pass only the string
-    tokens = get_token(userdata, userdata["user"]["username"], cid, sig)
-    r = requests.get(APIURL + AUTH_PROTECTED, headers={"Authorization": f"Bearer {tokens['access_token']}"}).json()
-    data = {
-        "tokens": tokens,
-        "exp": r["exp"]
-    }
-    return data
-
+# === User Management Functions ===
 def create_skey(username: str, password: str) -> bytes:
     key = keygen()
     ciphertext, tag, salt, nonce = encryptAESGCM(password=password, data=key, human=True)
@@ -281,7 +203,7 @@ def load_skey(username: str, password: str) -> bytes:
     except Exception as e:
         raise RuntimeError(f"decryption failed: {e}, password might be wrong or file might be corrupted")
 
-def create_user(username: str, password: str, tz: int) -> Dict[str, Any]:
+def create_user(username: str, password: str, tz: float) -> Dict[str, Any]:
     if os.path.exists(os.path.join(USERDIR, f"{username}_client-V2.json")):
         raise RuntimeError(f"registration failed: user exists on the clients storage")
     key = create_skey(username, password)
@@ -301,7 +223,7 @@ def create_user(username: str, password: str, tz: int) -> Dict[str, Any]:
     response = make_request(userdata={}, method="POST", url=APIURL + AUTH_REGISTER, json=u.model_dump()).json()
     if not response.get("ok"):
         raise RuntimeError(f"registration failed: {response}")
-    response = requests.get(APIURL + GET_USER + username).json()
+    response = make_request(userdata={}, method="GET", url=APIURL + GET_USER + username).json()
     if not response.get("ok"):
         raise RuntimeError(f"registration failed: {response}")
     data = {
@@ -359,16 +281,40 @@ def create_user(username: str, password: str, tz: int) -> Dict[str, Any]:
 def load_user(username: str, password: str) -> Dict[str, Any]:
     if not os.path.exists(os.path.join(USERDIR, f"{username}_client-V2.skey.json")) or not os.path.exists(os.path.join(USERDIR, f"{username}_client-V2.json")):
         raise RuntimeError("loading failed: clients files dont exist on the clients storage")
-    response = make_request(userdata={}, method="GET", url=APIURL + GET_USER + username).json()
+    try:
+        response = make_request(userdata={}, method="GET", url=APIURL + GET_USER + username).json()
+    except Exception as e:
+        raise RuntimeError(e)
     if not response.get("ok"):
         raise RuntimeError(f"loading failed: {resp}")
     key = load_skey(username, password)
     data = readjson(os.path.join(USERDIR, f"{username}_client-V2.json"))
     if data["user"]["ver"] != VERSION:
         warnings.warn("skey load warn: app version mismatch", RuntimeWarning)
-    privatekey_kyber = decryptAESGCM(key, data["user"]["keys"]["privatekey_kyber"]["ciphertext"], data["user"]["keys"]["privatekey_kyber"]["tag"], data["user"]["keys"]["privatekey_kyber"]["salt"], data["user"]["keys"]["privatekey_kyber"]["nonce"], human=False)
-    privatekey_sign_token = decryptAESGCM(key, data["user"]["keys"]["privatekey_sign_token"]["ciphertext"], data["user"]["keys"]["privatekey_sign_token"]["tag"], data["user"]["keys"]["privatekey_sign_token"]["salt"], data["user"]["keys"]["privatekey_sign_token"]["nonce"], human=False)
-    privatekey_sign_connection = decryptAESGCM(key, data["user"]["keys"]["privatekey_sign_connection"]["ciphertext"], data["user"]["keys"]["privatekey_sign_connection"]["tag"], data["user"]["keys"]["privatekey_sign_connection"]["salt"], data["user"]["keys"]["privatekey_sign_connection"]["nonce"], human=False)
+    privatekey_kyber = decryptAESGCM(
+        key,
+        data["user"]["keys"]["privatekey_kyber"]["ciphertext"],
+        data["user"]["keys"]["privatekey_kyber"]["tag"],
+        data["user"]["keys"]["privatekey_kyber"]["salt"],
+        data["user"]["keys"]["privatekey_kyber"]["nonce"],
+        human=False
+    )
+    privatekey_sign_token = decryptAESGCM(
+        key,
+        data["user"]["keys"]["privatekey_sign_token"]["ciphertext"],
+        data["user"]["keys"]["privatekey_sign_token"]["tag"],
+        data["user"]["keys"]["privatekey_sign_token"]["salt"],
+        data["user"]["keys"]["privatekey_sign_token"]["nonce"],
+        human=False
+    )
+    privatekey_sign_connection = decryptAESGCM(
+        key,
+        data["user"]["keys"]["privatekey_sign_connection"]["ciphertext"],
+        data["user"]["keys"]["privatekey_sign_connection"]["tag"],
+        data["user"]["keys"]["privatekey_sign_connection"]["salt"],
+        data["user"]["keys"]["privatekey_sign_connection"]["nonce"],
+        human=False
+    )
     publickey_kyber = b642byte(data["user"]["keys"]["publickey_kyber_b64"])
     publickey_sign_token = b642byte(data["user"]["keys"]["publickey_sign_token_b64"])
     publickey_sign_connection = b642byte(data["user"]["keys"]["publickey_sign_connection_b64"])
@@ -393,40 +339,42 @@ def load_user(username: str, password: str) -> Dict[str, Any]:
 # > puts messaging encryption under a diffrent header
 # shit ass programming time
 # (update on 18/09/2025 fixed this shit ass programming skill issue)
-def generate_message_id(sender: str, receiver: str, userdata: Dict[str, Any], token: str = None, update: bool = True) -> str: # pyright: ignore[reportArgumentType]
-    idgen = MessageIDGENModel(sender=sender, sendertoken=token, receiver=receiver, update=update)
-    response = make_authenticated_request("POST", APIURL + MSG_GET_ID, userdata, token, json=idgen.model_dump()).json()
-    if not response.get("ok"):
-        raise RuntimeError(f"Failed to generate message ID: {response}")
-    return response["msgid"]
+def generate_message_id(sender: str, receiver: str, userdata: Dict[str, Any], token: str = "", update: bool = True) -> str:
+    if sender == receiver:
+        return generate_message_id_local(sender, update)
+    else:
+        idgen = MessageIDGENModel(sender=sender, sendertoken=token, receiver=receiver, update=update)
+        response = make_authenticated_request("POST", APIURL + MSG_GET_ID, userdata, token, json=idgen.model_dump()).json()
+        if not response.get("ok"):
+            raise RuntimeError(f"Failed to generate message ID: {response}")
+        return response["msgid"]
 
 # shit ass function name, how long even this shit is??
 # edit (04/11/2025): well this doesnt looks so bad rigth now isnt it
-def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username: str, payload: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
-    receiver_info = make_authenticated_request("GET", APIURL + GET_USER + receiver_username, userdata, token).json()
-    if not receiver_info.get("ok"):
-        raise RuntimeError(f"Failed to get receiver info: {receiver_info}")
-    message_id = generate_message_id(userdata["user"]["username"], receiver_username, userdata, token)
+# edit 2 (11/11/2025): changed the name because ts gonna be so hard to manage
+def send_message_ps(userdata: Dict[str, Any], receiver_username: str, payload: Dict[str, Any], token: str = "") -> Dict[str, Any]:
+    # ps stands for persistent storage
     if not receiver_username == userdata["user"]["username"]:
+        receiver_info = make_authenticated_request("GET", APIURL + GET_USER + receiver_username, userdata, token).json()
+        if not receiver_info.get("ok"):
+            raise RuntimeError(f"Failed to get receiver info: {receiver_info}")
+        message_id = generate_message_id(userdata["user"]["username"], receiver_username, userdata, token, update=True)
         receiver_public_key = receiver_info["data"]["publickey_kyber"]
         ciphertext_b64, sharedsecret = encapsulate_shared_secret(userdata["ram"]["kyber_obj"], receiver_public_key)
-        payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64, hkdfsalt = encrypt_message_payload(sharedsecret, payload)
+        payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64, hkdfsalt = encrypt_message_payload(sharedsecret, jsondump(payload))
         messagemodel = MessageSendModel(messageid=message_id, sender=userdata["user"]["username"], sendertoken=token, receiver=receiver_username,
-                                        sender_pk=userdata["user"]["keys"]["publickey_kyber_b64"], receiver_pk=receiver_public_key, ciphertext=ciphertext_b64,
-                                        payload_ciphertext=payload_ciphertext_b64, payload_tag=payload_tag_b64, payload_salt= payload_salt_b64,
-                                        payload_nonce=payload_nonce_b64, hkdfsalt=hkdfsalt)
+                                        ciphertext=ciphertext_b64, payload_ciphertext=payload_ciphertext_b64, payload_tag=payload_tag_b64,
+                                        payload_salt=payload_salt_b64, payload_nonce=payload_nonce_b64, hkdfsalt=hkdfsalt)
         response = make_authenticated_request("POST", APIURL + MSG_SEND, userdata, token, json=messagemodel.model_dump()).json()
         if not response.get("ok"):
             raise RuntimeError(f"failed to send message: {response}")
         senddata = {
             "status": "sent",
             "message_id": message_id,
-            "timestamp": response.get("timestamp"),
+            "timestamp": payload["timestamp"],
             "tokenexp": response.get("tokenexp"),
             "sender": userdata["user"]["username"],
             "receiver": receiver_username,
-            "sender_pk": userdata["user"]["keys"]["publickey_kyber_b64"],
-            "receiver_pk": receiver_public_key,
             "hkdfsalt": hkdfsalt,
             "ciphertext": ciphertext_b64,
             "encrypted_payload_for_storage_ciphertext": payload_ciphertext_b64,
@@ -436,17 +384,16 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
             "shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT": sharedsecret # i think this might be important gang :sob: :wilted-rose:
         }
     else:
+        message_id = generate_message_id(userdata["user"]["username"], userdata["user"]["username"], userdata, token="", update=True)
         sharedsecret = keygen()
-        payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64, hkdfsalt = encrypt_message_payload(sharedsecret, payload)
+        payload_ciphertext_b64, payload_tag_b64, payload_salt_b64, payload_nonce_b64, hkdfsalt = encrypt_message_payload(sharedsecret, jsondump(payload))
         senddata = {
             "status": "local",
             "message_id": message_id,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp": payload["timestamp"],
             "tokenexp": 0,
             "sender": userdata["user"]["username"],
             "receiver": receiver_username,
-            "sender_pk": userdata["user"]["keys"]["publickey_kyber_b64"],
-            "receiver_pk": userdata["user"]["keys"]["publickey_kyber_b64"],
             "hkdfsalt": hkdfsalt,
             "ciphertext": 0,
             "encrypted_payload_for_storage_ciphertext": payload_ciphertext_b64,
@@ -456,13 +403,13 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
             "shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT": sharedsecret
         }
     userkey = userdata["ram"]["key"]
+    hkdfsalt = os.urandom(32)
+    deriveduserkey = hkdf_function(userkey, hkdfsalt)
     userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V2.json")
     userfiledata = readjson(userfile)
-    (sharedsecret_local_ciphertext, sharedsecret_local_tag, sharedsecret_local_salt, sharedsecret_local_nonce) = encryptAESGCM(userkey, senddata["shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"], human=False)
-    # i mean we are buildidng in such way if the users "shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT" is exposed also the reciever is in danger
-    # but wait, even if it gets leaked that message could be read by the attackers? so no need to use another key? also this is high entropy so shouldnt be a problem?
-    # gang i might lowkey have no idea what the fucking shit i am doing bruh
+    (sharedsecret_local_ciphertext, sharedsecret_local_tag, sharedsecret_local_salt, sharedsecret_local_nonce) = encryptAESGCM(deriveduserkey, senddata["shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT"], human=False)
     userfiledata["messages"][senddata['message_id']] = {
+        "hkdfsalt_key": byte2b64(hkdfsalt),
         "local_ciphertext": sharedsecret_local_ciphertext,
         "local_tag": sharedsecret_local_tag,
         "local_salt": sharedsecret_local_salt,
@@ -481,38 +428,61 @@ def send_message_persistent_storage(userdata: Dict[str, Any], receiver_username:
         "receiver": receiver_username
     }
 
-def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], username: str, token: str = None) -> Dict[str, Any]: # pyright: ignore[reportArgumentType]
+def get_message_ps(message_id: str, userdata: Dict[str, Any], username: str, token: str = ""):
     messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V2-CLIENT.json")
     userfile = os.path.join(USERDIR, f"{userdata['user']['username']}_client-V2.json")
     userfiledata = readjson(userfile)
     userkey = userdata["ram"]["key"]
     if not username == userdata["user"]["username"]:
-        params = {"sendertoken": token}
-        response = make_authenticated_request("GET", APIURL + MSG_GET + message_id, userdata, token, params=params).json()
-        if not response.get("ok"):
-            raise RuntimeError(f"failed to get message: {response}")
-        response_message = response["message"]
-        userkey = userdata["ram"]["key"]
         if os.path.exists(messagefp):
             # we are trying to read a existing, saved, local file OR
             # sender is trying to get this text, so we gonna use the existing one
-            shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userkey, userfiledata["messages"][message_id]["local_ciphertext"], userfiledata["messages"][message_id]["local_tag"], userfiledata["messages"][message_id]["local_salt"], userfiledata["messages"][message_id]["local_nonce"], human=False)
+            deriveduserkey = hkdf_function(userkey, userfiledata["messages"][message_id]["hkdfsalt"])
+            shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(
+                deriveduserkey,
+                userfiledata["messages"][message_id]["local_ciphertext"],
+                userfiledata["messages"][message_id]["local_tag"],
+                userfiledata["messages"][message_id]["local_salt"],
+                userfiledata["messages"][message_id]["local_nonce"],
+                human=False
+            )
             local_send_data = readjson(messagefp)
-            plaintext = byte2str(decrypt_message_payload(shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, local_send_data["encrypted_payload_for_storage_ciphertext"], local_send_data["encrypted_payload_for_storage_payload_tag"], local_send_data["encrypted_payload_for_storage_payload_salt"], local_send_data["encrypted_payload_for_storage_payload_nonce"], local_send_data["hkdfsalt"]))
+            payload = jsonload(byte2str(decrypt_message_payload(
+                shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT,
+                local_send_data["encrypted_payload_for_storage_ciphertext"],
+                local_send_data["encrypted_payload_for_storage_payload_tag"],
+                local_send_data["encrypted_payload_for_storage_payload_salt"],
+                local_send_data["encrypted_payload_for_storage_payload_nonce"],
+                local_send_data["hkdfsalt"]
+            )))
             return {
-                "message_id": local_send_data["message_id"],
                 "status": "get",
-                "sender": local_send_data["sender"],
+                "message_id": message_id,
+                "payload": payload,
                 "receiver": local_send_data["receiver"],
-                "message": plaintext,
-                "timestamp": local_send_data["timestamp"],
+                "sender": local_send_data["sender"],
                 "tokenexp": local_send_data["tokenexp"]
             }
         else:
+            params = {"sendertoken": token}
+            response = make_authenticated_request("GET", APIURL + MSG_GET + message_id, userdata, token, params=params).json()
+            if not response.get("ok"):
+                raise RuntimeError(f"failed to get message: {response}")
+            response_message = response["message"]
             shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decapsulate_shared_secret(userdata["ram"]["kyber_obj"], response_message["ciphertext"])
-            plaintext = byte2str(decrypt_message_payload(shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, response_message["payload_ciphertext"], response_message["payload_tag"], response_message["payload_salt"], response_message["payload_nonce"], response_message["hkdfsalt"]))
-            (local_ciphertext, local_tag, local_salt, local_nonce) = encryptAESGCM(userkey, shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, human=False)
+            payload = jsonload(byte2str(decrypt_message_payload(
+                shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT,
+                response_message["payload_ciphertext"],
+                response_message["payload_tag"],
+                response_message["payload_salt"],
+                response_message["payload_nonce"],
+                response_message["hkdfsalt"]
+            )))
+            hkdfsalt = os.urandom(32)
+            deriveduserkey = hkdf_function(userkey, hkdfsalt)
+            (local_ciphertext, local_tag, local_salt, local_nonce) = encryptAESGCM(deriveduserkey, shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, human=False)
             userfiledata["messages"][message_id] = {
+                "hkdfsalt": hkdfsalt,
                 "local_ciphertext": local_ciphertext,
                 "local_tag": local_tag,
                 "local_salt": local_salt,
@@ -521,13 +491,10 @@ def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], u
             messagefp = os.path.join(MESSAGEDIR, f"{message_id}-msg-V2-CLIENT.json")
             writejson(userfile, userfiledata)
             local_send_data = {
-                "status": "recieved",
-                "timestamp": response_message["timestamp"],
+                "status": "get",
                 "tokenexp": response["tokenexp"],
                 "sender": response_message["sender"],
                 "receiver": response_message["receiver"],
-                "sender_pk": response_message["sender_pk"],
-                "receiver_pk": response_message["receiver_pk"],
                 "message_id": message_id,
                 "hkdfsalt": response_message["hkdfsalt"],
                 "encrypted_payload_for_storage_ciphertext": response_message["payload_ciphertext"],
@@ -537,39 +504,91 @@ def get_message_persistent_storage2(message_id: str, userdata: Dict[str, Any], u
             }
             writejson(messagefp, local_send_data)
             return {
-                "message_id": message_id,
                 "status": "get",
-                "message": plaintext,
-                "timestamp": response_message["timestamp"],
+                "message_id": message_id,
+                "payload": payload,
+                "receiver": response_message["receiver"],
                 "sender": response_message["sender"],
                 "tokenexp": response["tokenexp"],
-                "message_id_server": response_message["messageid"],
-                "receiver": response_message["receiver"],
             }
     else:
-        shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(userkey, userfiledata["messages"][message_id]["local_ciphertext"], userfiledata["messages"][message_id]["local_tag"], userfiledata["messages"][message_id]["local_salt"], userfiledata["messages"][message_id]["local_nonce"], human=False)
+        deriveduserkey = hkdf_function(userkey, userfiledata["messages"][message_id]["hkdfsalt"])
+        shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(
+            deriveduserkey,
+            userfiledata["messages"][message_id]["local_ciphertext"],
+            userfiledata["messages"][message_id]["local_tag"],
+            userfiledata["messages"][message_id]["local_salt"],
+            userfiledata["messages"][message_id]["local_nonce"],
+            human=False
+        )
         local_send_data = readjson(messagefp)
-        plaintext = byte2str(decrypt_message_payload(shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, local_send_data["encrypted_payload_for_storage_ciphertext"], local_send_data["encrypted_payload_for_storage_payload_tag"], local_send_data["encrypted_payload_for_storage_payload_salt"], local_send_data["encrypted_payload_for_storage_payload_nonce"], local_send_data["hkdfsalt"]))
+        payload = jsonload(byte2str(decrypt_message_payload(
+            shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT,
+            local_send_data["encrypted_payload_for_storage_ciphertext"],
+            local_send_data["encrypted_payload_for_storage_payload_tag"],
+            local_send_data["encrypted_payload_for_storage_payload_salt"],
+            local_send_data["encrypted_payload_for_storage_payload_nonce"],
+            local_send_data["hkdfsalt"]
+        )))
         return {
-            "message_id": local_send_data["message_id"],
-            "status": "get",
-            "sender": local_send_data["sender"],
-            "receiver": local_send_data["receiver"],
-            "message": plaintext,
-            "timestamp": local_send_data["timestamp"],
-            "tokenexp": local_send_data["tokenexp"]
-        }
+                "status": "get",
+                "message_id": local_send_data["message_id"],
+                "payload": payload,
+                "receiver": local_send_data["receiver"],
+                "sender": local_send_data["sender"],
+                "tokenexp": local_send_data["tokenexp"],
+            }
+
+def send_text_message_ps(userdata: Dict[str, Any], receiver_username: str, message: str, token: str = "") -> Dict[str, Any]:
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    payload = {"type": "text", "message": message, "timestamp": timestamp}
+    return send_message_ps(userdat, receiver_username, payload, token)
+
+def get_text_message_ps(message_id: str, userdata: Dict[str, Any], username: str, token: str = ""):
+    messagedict = get_message_ps(message_id, userdata, username, token)
+    payload = messagedict["payload"]
+    sender = messagedict["sender"]
+    msgtype = payload["type"]
+    message = payload["message"]
+    timestamp = payload["timestamp"]
+    return {
+        "sender": sender,
+        "timestamp": timestamp,
+        "message": message
+    }
+
+def send_file_message_ps(userdata: Dict[str, Any], receiver_username: str, fp: str, filetype: str, token: str = ""):
+    print("send file not implemented yet")
+    return {"status": "error"}
 
 # === client web server shit ===
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+@app.on_event("startup") # i wasnt able to un-deprecate this...
+async def startup():
+    templates.env.filters['url_decode'] = unquote
+
 @app.exception_handler(RuntimeError)
 async def runtime_error_exception_handler(request: Request, exc: RuntimeError):
     error_message = quote(str(exc))
     referer = request.headers.get("referer", "/")
-    if "?" in referer:
-        redirect_url = f"{referer}&error={error_message}"
-    else:
-        redirect_url = f"{referer}?error={error_message}"
-    return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+    parsed = urlparse(referer)
+    query = parse_qs(parsed.query)
+    query.pop("error", None)
+    query["error"] = [error_message]
+    new_query = urlencode(query, doseq=True)
+    redirect_url = urlunparse(parsed._replace(query=new_query))
+    return RedirectResponse(
+        url=redirect_url,
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+# EXAMPLE, does not work for now
+@app.get("/download")
+async def download_file():
+    content = b"example byte file that was generated on the fly"
+    buffer = BytesIO(content)  # put text into memory buffer
+    # return as a downloadable file
+    return StreamingResponse(buffer, media_type="application/octet-stream", headers={"Content-Disposition": 'attachment; filename="generated.txt"'})
 
 @app.get("/", response_class=HTMLResponse)
 async def homeUI(request: Request):
@@ -596,7 +615,7 @@ async def registerUI(request: Request):
 @app.post("/register-send")
 async def register_send(username: str = Form(...), password: str = Form(...), timezone: str = Form(...)):
     global userdat
-    userdat = create_user(username, password, int(timezone))
+    userdat = create_user(username, password, get_timezone_offset_hours(timezone))
     return RedirectResponse(url="/login", status_code=302)
 
 @app.get("/contacts/{username}")
@@ -627,7 +646,7 @@ async def delete_contact(username: str = Form(...), del_contact: str = Form(...)
 async def mainUI(request: Request):
     global userdat
     global tok
-    if not userdat:
+    if userdat == {}:
         return RedirectResponse(url="/login", status_code=302)
     get_current_token(userdat)
     contacts_dict = readjson(os.path.join(USERDIR, "userslist-V2.json")).get("contacts", {})
@@ -646,7 +665,7 @@ async def settingsUI(request: Request):
 async def logoutUI(request: Request):
     global userdat
     global tok
-    userdat = None
+    userdat = {}
     tok = None
     return RedirectResponse(url="/login", status_code=302)
 
@@ -657,7 +676,7 @@ async def websocket_endpoint(ws: WebSocket):
     messages = {}
     await ws.accept()
     connections.append(ws)
-    await ws.send_json({"lines": [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]})
+    await ws.send_json({"lines": [entry for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]})
     try:
         while True:
             jsondata = await ws.receive_json()
@@ -665,53 +684,82 @@ async def websocket_endpoint(ws: WebSocket):
             action = jsondata.get("action")
             username = jsondata.get("username", None)
             message = jsondata.get("message", "")
-            access_token_str = get_current_token(userdat) # pyright: ignore[reportArgumentType]
+            try:
+                access_token_str = get_current_token(userdat)
+            except Exception as e:
+                await ws.send_json({"error": f"Token error: {str(e)}"})
+                continue
             if action == "send":
-                messagedata = send_message_persistent_storage(userdat, username, message, access_token_str) # pyright: ignore[reportArgumentType]
+                messagedata = send_text_message_ps(userdata=userdat, receiver_username=username, message=message, token=access_token_str)
                 if messagedata["status"] != "sent":
                     raise RuntimeError("message couldn't be sent")
-                pass
+            elif action == "sendf":
+                fp = await get_filepath_async(title="select file to send")
+                if fp:
+                    messagedata = send_file_message_ps(userdat, username, fp, "file", access_token_str)
+                    if messagedata["status"] != "sent":
+                        raise RuntimeError("message couldn't be sent")
             elif action == "get":
                 if username is not None:
                     scrolled_text_data.clear()
-                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False) # pyright: ignore[reportArgumentType, reportOptionalSubscript]
+                    messageid = generate_message_id(userdat["user"]["username"], username, userdat, access_token_str, update=False)
                     counter = int(messageid.split("-")[1])
                     usershash = messageid.split("-")[0]
                     for msgnum in range(1, counter + 1):
                         msgid = f"{usershash}-{msgnum}"
                         if not messages.get(msgid):
-                            messagedata = get_message_persistent_storage2(msgid, userdat, username, access_token_str) # pyright: ignore[reportArgumentType]
+                            messagedata = get_text_message_ps(msgid, userdat, username, access_token_str)
                             messages[msgid] = messagedata
                         else:
                             messagedata = messages[msgid]
-                        plaintext = messagedata["message"]
+                        try:
+                            plaintext = messagedata["message"]
+                            message_obj = jsonload(plaintext)
+                        except (json.JSONDecodeError, KeyError):
+                            # UNBOUND
+                            message_obj = {"type": "message", "content": plaintext} # pyright: ignore[reportPossiblyUnboundVariable]
                         sender = messagedata["sender"]
                         timestamp = messagedata["timestamp"]
-                        entry = messageformatter(sender, plaintext, timestamp, timezone=userdat["user"]["tz"]) # pyright: ignore[reportOptionalSubscript]
+                        entry = messageformatter(sender, message_obj, timestamp, timezone=userdat["user"]["tz"]) # pyright: ignore[reportArgumentType]
                         scrolled_text_data.append(entry)
             try:
-                sorted_lines = [entry["formatted"] for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]
+                sorted_lines = [entry for entry in sorted(scrolled_text_data, key=lambda x: x["timestamp"])]
             except Exception as e:
-                sorted_lines = [entry["formatted"] for entry in scrolled_text_data]
-                sorted_lines.append("sorting failed, see logs")
+                sorted_lines = [entry for entry in scrolled_text_data]
+                sorted_lines.append({"type": "error", "content": "sorting failed, see logs", "timestamp": time.time()})
                 warnings.warn(f"message sorting failed, skipping sorting: {e}", RuntimeWarning)
             stop = time.time()
-            token_exp = tok.get("exp", 0) if tok else 0
+            token_exp = check_tokenexpiration(userdat, access_token_str)
+            token_exp = token_exp if token_exp != None else 0
             time_until_exp = max(0, token_exp - time.time())
+            time_until_exp = "now" if time_until_exp == 0 else f"{time_until_exp:.0f}s"
             apistat = [
                 f"api url: {APIURL} is alive: {apiTunnelAlive()}", 
                 f"last action took {(stop-start)*1000:.0f} ms, updates per second: {(1/(stop-start+0.001)):.2f}",
-                f"token expires in: {time_until_exp:.0f}s",
+                f"token expires in: {time_until_exp}",
                 "MOTD: Have a nice day!"
             ]
+            dead_connections = []
             for conn in connections:
-                await conn.send_json({
-                    "lines": sorted_lines,
-                    "apistat": apistat,
-                })
+                try:
+                    await conn.send_json({
+                        "lines": sorted_lines,
+                        "apistat": apistat,
+                    })
+                except Exception as e:
+                    print(f"Dead connection detected: {e}")
+                    dead_connections.append(conn)
+            for dead_conn in dead_connections:
+                if dead_conn in connections:
+                    connections.remove(dead_conn)  
     except WebSocketDisconnect:
-        connections.remove(ws)
+        if ws in connections:
+            connections.remove(ws)
         scrolled_text_data.clear()
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        if ws in connections:
+            connections.remove(ws)
 
 def portused(port, host="127.0.0.1"):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

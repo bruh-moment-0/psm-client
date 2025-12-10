@@ -1,23 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
-<a href="/settings">settings</a>
-<a href="/logout">logout</a>
-<h3>PSM CLIENT SERVER MAIN MESSAGING PAGE, logged in as {{ username }}</h3>
-
-<div id="sidebar">
-    <h3>usernames list</h3>
-    <ul id="usernameList"></ul>
-    <input type="text" id="newUsername" placeholder="enter new username">
-    <button onclick="addUsername()">add</button>
-    <button onclick="deleteUsername()">delete selected username</button>
+<div id="header-links">
+    <a href="/settings">settings</a>
+    <a href="/logout">logout</a>
 </div>
 
-<div id="mainchatarea">
-    <textarea id="serverText" readonly></textarea>
-    <div id="scrolledText"></div>
-    <input type="text" id="msgInputBox" placeholder="enter message...">
-    <button onclick="sendMessage()">send</button>
-    <button onclick="getMessage()">refresh</button>
+<h3 id="page-title">PSM CLIENT SERVER MAIN MESSAGING PAGE, logged in as {{ username }}</h3>
+
+<div id="container">
+    <div id="sidebar">
+        <h3>usernames list</h3>
+        <ul id="usernameList"></ul>
+        <input type="text" id="newUsername" placeholder="enter new username">
+        <button onclick="addUsername()">add</button>
+        <button onclick="deleteUsername()">delete selected username</button>
+    </div>
+
+    <div id="mainchatarea">
+        <textarea id="serverText" readonly></textarea>
+        <div id="scrolledText"></div>
+        <div class="message-input-container">
+            <input type="text" id="msgInputBox" placeholder="enter message...">
+            <button id="sendfile" onclick="sendFile()">send a file</button>
+            <button id="sendButton" onclick="sendMessage()">send</button>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -29,15 +36,32 @@
     let isRefreshing = false;
     let refreshTimer = null;
     const currentUser = "{{ username }}";
-
     async function loadContacts() {
-        const res = await fetch(`/contacts/${currentUser}`);
-        const data = await res.json();
-        createList(data.contacts);
+        try {
+            const res = await fetch(`/contacts/${currentUser}`);
+            if (!res.ok) {
+                console.error("failed to load contacts:", res.status);
+                return;
+            }
+            const data = await res.json();
+            if (data.contacts && Array.isArray(data.contacts)) {
+                createList(data.contacts);
+            }
+        } catch (error) {
+            console.error("error loading contacts:", error);
+        }
     }
 
     function createList(contacts) {
         usernameList.innerHTML = "";
+        if (!contacts || contacts.length === 0) {
+            const li = document.createElement("li");
+            li.textContent = "No contacts yet";
+            li.style.fontStyle = "italic";
+            li.style.color = "#999";
+            usernameList.appendChild(li);
+            return;
+        }
         contacts.forEach(contact => {
             const li = document.createElement("li");
             li.id = `user-${contact}`;
@@ -48,39 +72,113 @@
         });
     }
 
+    function renderMessage(entry) {
+        const container = document.createElement("div");
+        container.className = "message-container";
+        const header = document.createElement("div");
+        header.className = "message-header";
+        header.textContent = `[${entry.formatted_time}] ${entry.sender} > `;
+        const content = document.createElement("div");
+        content.className = "message-content";
+        const msg = entry.message;
+        if (msg.type === "message") {
+            content.textContent = msg.content;
+        } else if (msg.type === "image") {
+            const img = document.createElement("img");
+            img.className = "message-image";
+            img.src = msg.content;
+            img.alt = msg.alt || "Image";
+            content.appendChild(img);
+        } else if (msg.type === "file") {
+            const fileDiv = document.createElement("div");
+            fileDiv.className = "message-file";
+            fileDiv.textContent = `📎 ${msg.filename || "File"}`;
+            content.appendChild(fileDiv);
+        } else {
+            content.textContent = JSON.stringify(msg);
+        }
+        container.appendChild(header);
+        container.appendChild(content);
+        return container;
+    }
+
     ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        scrolledText.innerHTML = data.lines.map(line => `<div>${line}</div>`).join("");
-        scrolledText.scrollTop = scrolledText.scrollHeight;
-        serverText.value = data.apistat.join("\n");
-        serverText.scrollTop = serverText.scrollHeight;
-        isRefreshing = false;
-        refreshLoop();
+        try {
+            const data = JSON.parse(event.data);
+            scrolledText.innerHTML = "";
+            
+            if (data.lines && Array.isArray(data.lines)) {
+                data.lines.forEach(entry => {
+                    try {
+                        scrolledText.appendChild(renderMessage(entry));
+                    } catch (err) {
+                        console.error("error rendering message:", err, entry);
+                    }
+                });
+            }
+            
+            scrolledText.scrollTop = scrolledText.scrollHeight;
+            
+            if (data.apistat && Array.isArray(data.apistat)) {
+                serverText.value = data.apistat.join("\n");
+                serverText.scrollTop = serverText.scrollHeight;
+            }
+            
+            isRefreshing = false;
+            refreshLoop();
+        } catch (error) {
+            console.error("Error processing WebSocket message:", error);
+            isRefreshing = false;
+        }
     };
 
     async function addUsername() {
         const newUsername = document.getElementById("newUsername").value.trim();
         if (!newUsername) return alert("please enter a username.");
         if (document.getElementById(`user-${newUsername}`)) return alert("username already exists.");
-        const formData = new FormData();
-        formData.append("username", currentUser);
-        formData.append("new_contact", newUsername);
-        const res = await fetch("/contacts/add", { method: "POST", body: formData });
-        const data = await res.json();
-        createList(data.contacts);
-        document.getElementById("newUsername").value = "";
+        
+        try {
+            const formData = new FormData();
+            formData.append("username", currentUser);
+            formData.append("new_contact", newUsername);
+            const res = await fetch("/contacts/add", { method: "POST", body: formData });
+            if (!res.ok) {
+                console.error("failed to add contact:", res.status);
+                return alert("failed to add contact");
+            }
+            const data = await res.json();
+            if (data.contacts && Array.isArray(data.contacts)) {
+                createList(data.contacts);
+                document.getElementById("newUsername").value = "";
+            }
+        } catch (error) {
+            console.error("error adding contact:", error);
+            alert("error adding contact");
+        }
     }
 
     async function deleteUsername() {
-    if (!selectedUsername) return alert("no username selected.");
-        const formData = new FormData();
-        formData.append("username", currentUser);
-        formData.append("del_contact", selectedUsername);
-        const res = await fetch("/contacts/delete", { method: "POST", body: formData });
-        const data = await res.json();
-        createList(data.contacts);
-        selectedUsername = null;
-        document.getElementById("scrolledText").innerHTML = "";
+        if (!selectedUsername) return alert("no username selected.");
+        
+        try {
+            const formData = new FormData();
+            formData.append("username", currentUser);
+            formData.append("del_contact", selectedUsername);
+            const res = await fetch("/contacts/delete", { method: "POST", body: formData });
+            if (!res.ok) {
+                console.error("failed to delete contact:", res.status);
+                return alert("failed to delete contact");
+            }
+            const data = await res.json();
+            if (data.contacts && Array.isArray(data.contacts)) {
+                createList(data.contacts);
+                selectedUsername = null;
+                document.getElementById("scrolledText").innerHTML = "";
+            }
+        } catch (error) {
+            console.error("error deleting contact:", error);
+            alert("error deleting contact");
+        }
     }
 
     function selectUsername(username) {
@@ -93,14 +191,27 @@
 
     function sendMessage() {
         const message = document.getElementById("msgInputBox").value.trim();
-        if (!selectedUsername) return alert("Please select a username first.");
-        if (!message) return alert("Message cannot be empty.");
+        if (!selectedUsername) return alert("please select a username first.");
+        if (!message) return alert("message cannot be empty.");
+        const messageObj = {
+            type: "message",
+            content: message
+        };
         ws.send(JSON.stringify({
             action: "send",
             username: selectedUsername,
-            message: message
+            message: JSON.stringify(messageObj)
         }));
         document.getElementById("msgInputBox").value = "";
+    }
+
+    function sendFile() {
+        const message = document.getElementById("msgInputBox").value.trim();
+        if (!selectedUsername) return alert("please select a username first.");
+        ws.send(JSON.stringify({
+            action: "sendf",
+            username: selectedUsername
+        }));
     }
 
     function getMessage() {
@@ -119,6 +230,16 @@
     }
 
     loadContacts();
-    ws.onopen = () => refreshLoop();
+    ws.onopen = () => {
+        console.log("websocket connected");
+        refreshLoop();
+    };
+
+    document.getElementById("msgInputBox").addEventListener("keydown", function(event) {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
 </script>
 {% endblock %}

@@ -32,7 +32,7 @@
         <main>
             {% if request.query_params.error %}
             <error>
-                <strong>error:</strong> {{ request.query_params.error }}
+                <strong>error:</strong> {{ request.query_params.error | url_decode }}
             </error>
             {% endif %}
             <h3>{{ version }}</h3>

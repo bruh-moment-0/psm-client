@@ -3,13 +3,13 @@ body {
     background-color: white;
     color: black;
     font-size: 15px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
     font-family: system-ui, Arial, sans-serif;
     margin: 0;
+}
+
+.message-input-container {
+    display: flex;
+    gap: 5px;
 }
 
 .dark-mode {
@@ -29,58 +29,120 @@ code {
     font-family: Consolas, "Courier New", monospace;
 }
 
-header {
-    margin-bottom: 1rem;
+#header-links {
+    text-align: center;
+    margin-bottom: 10px;
 }
 
-#mainchatarea {
-    margin-left: 220px;
+#header-links a {
+    margin: 0 10px;
 }
 
-#serverText {
-    width: 100%;
-    height: 100px;
-    resize: vertical;
-    overflow-y: scroll;
-    font-family: Consolas, "Courier New", monospace;
-    font-size: 14px;
-    border: 1px solid #555;
-    padding: 5px;
-    background: white;
-    color: black;
+#page-title {
+    text-align: center;
+    margin-bottom: 20px;
 }
 
-#scrolledText {
-    width: 600px;
-    height: 300px;
-    resize: vertical;
-    overflow-y: scroll;
-    font-family: Consolas, "Courier New", monospace;
-    font-size: 14px;
-    border: 1px solid #555;
-    padding: 5px;
-    background: white;
-    color: black;
-    white-space: pre-wrap;
-}
-
-#msgInputBox {
-    width: 100%;
-    border: 1px solid #555;
-    background: white;
-    color: black;
-    padding: 5px;
+#container {
+    display: flex;
+    gap: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
 }
 
 #sidebar {
-    float: left;
-    width: 200px;
-    padding-right: 20px;
+    width: 250px;
+    flex-shrink: 0;
+}
+
+#sidebar h3 {
+    margin-top: 0;
 }
 
 #usernameList {
     list-style-type: none;
     padding-left: 0;
+    margin-bottom: 10px;
+}
+
+#usernameList li {
+    padding: 5px;
+    margin-bottom: 3px;
+    border-radius: 3px;
+}
+
+#usernameList li:hover {
+    background-color: #f0f0f0;
+}
+
+.dark-mode #usernameList li:hover {
+    background-color: #2a2a2a;
+}
+
+#newUsername {
+    width: 100%;
+    margin-bottom: 5px;
+    padding: 5px;
+    box-sizing: border-box;
+    border: 1px solid #555;
+    background: white;
+    color: black;
+}
+
+#sidebar button {
+    width: 100%;
+    margin-bottom: 5px;
+    padding: 5px;
+}
+
+#mainchatarea {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#serverText {
+    width: 100%;
+    height: 80px;
+    resize: vertical;
+    overflow-y: scroll;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 14px;
+    border: 1px solid #555;
+    padding: 5px;
+    background: white;
+    color: black;
+    box-sizing: border-box;
+}
+
+#scrolledText {
+    width: 100%;
+    height: 500px;
+    resize: vertical;
+    overflow-y: scroll;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 16px;
+    border: 1px solid #555;
+    padding: 5px;
+    background: white;
+    color: black;
+    white-space: pre-wrap;
+    box-sizing: border-box;
+}
+
+#msgInputBox {
+    flex: 1;
+    border: 1px solid #555;
+    background: white;
+    color: black;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+#mainchatarea button {
+    padding: 8px 15px;
+    flex-shrink: 0;
 }
 
 error {
@@ -89,6 +151,7 @@ error {
     padding: 10px;
     margin-bottom: 15px;
     border-radius: 5px;
+    display: block;
 }
 
 warning {
@@ -97,24 +160,18 @@ warning {
     padding: 10px;
     margin-bottom: 15px;
     border-radius: 5px;
+    display: block;
 }
 
 .dark-mode #serverText,
 .dark-mode #scrolledText,
 .dark-mode #msgInputBox,
+.dark-mode #newUsername,
 .dark-mode input,
 .dark-mode textarea {
     background-color: #1e1e1e;
     color: #f5f5f5;
     border: 1px solid #888;
-}
-
-.dark-mode #scrolledText {
-    border-color: #666;
-}
-
-.dark-mode #sidebar {
-    border-color: #666;
 }
 
 .dark-mode error {
@@ -140,10 +197,40 @@ warning {
 }
 
 .dark-mode a {
-    background-color: #2a2a2a;
-    color: rgb(50, 35, 150);
+    background-color: #121212;
+    color: rgb(30, 30, 250);
 }
 
-.dark-mode header a:hover {
-    color: rgb(50, 35, 250);
+.dark-mode a:hover {
+    color: rgb(30, 150, 250);
+}
+
+.message-container {
+    margin-bottom: 8px;
+}
+
+.message-header {
+    font-weight: bold;
+    margin-bottom: 2px;
+}
+
+.message-content {
+    padding-left: 10px;
+}
+
+.message-image {
+    max-width: 300px;
+    max-height: 300px;
+    border-radius: 5px;
+}
+
+.message-file {
+    padding: 5px 10px;
+    background-color: #f0f0f0;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.dark-mode .message-file {
+    background-color: #2a2a2a;
 }

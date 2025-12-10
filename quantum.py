@@ -2,7 +2,35 @@
 # 02/11/2025
 
 from typing import Optional, Tuple, Any
-import oqs
+from data import BASEDIR
+import os
+
+def file_exists(path):
+    return os.path.isfile(path)
+
+def remove_file(path):
+    os.remove(path)
+
+firstbootflag = os.path.join(BASEDIR, "firstboot.flag")
+requirements = os.path.join(BASEDIR, "requirements.txt")
+if file_exists(firstbootflag):
+    print("Thank you for using Private Safe Messaging.")
+    print("In the first startup, there will be many operations, which will happen now.")
+    print("This will not happen again if you do not remove the _oqs folder.")
+    print("While setting up, do NOT close this window, or your installation might get corrupted!")
+    print("When the setup is over, the program will continue as normal.")
+    print("Press ENTER to acknowledge.")
+    _ = input("")
+    remove_file(firstbootflag)
+    print("installing dependencies.")
+    os.system(f"pip install -r {requirements}")
+    print("installed dependencies.")
+    print("installing liboqs-python...")
+    os.system("git clone --depth=1 https://github.com/open-quantum-safe/liboqs-python")
+    os.system("cd liboqs-python && pip install .")
+    print("ok, liboqs-python is ready! calling oqs...")
+
+import oqs # pyright: ignore[reportMissingImports]
 
 # sign algos:
 # print(oqs.get_enabled_sig_mechanisms())

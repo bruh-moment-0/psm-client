@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>REGISTER</h2>
+<form action="/login" method="get">
+    <button type="submit">or login instead</button>
+</form>
 <pre>current users on disk:</pre>
 <ul>
     {% for option in options %}
@@ -10,39 +13,27 @@
 <form action="/register-send" method="post">
     <input name="username" placeholder="enter username">
     <input name="password" type="password" placeholder="enter password">
-    <label for="timezone">select your timezone:</label>
+    <br>
+    <label for="timezone">timezone</label>
     <select id="timezone" name="timezone" required>
-        <option value="">-- select timezone --</option>
-        <option value="-12">GMT -12</option>
-        <option value="-11">GMT -11</option>
-        <option value="-10">GMT -10</option>
-        <option value="-9">GMT -9</option>
-        <option value="-8">GMT -8</option>
-        <option value="-7">GMT -7</option>
-        <option value="-6">GMT -6</option>
-        <option value="-5">GMT -5</option>
-        <option value="-4">GMT -4</option>
-        <option value="-3">GMT -3</option>
-        <option value="-2">GMT -2</option>
-        <option value="-1">GMT -1</option>
-        <option value="+0">GMT +0</option>
-        <option value="+1">GMT +1</option>
-        <option value="+2">GMT +2</option>
-        <option value="+3">GMT +3</option>
-        <option value="+4">GMT +4</option>
-        <option value="+5">GMT +5</option>
-        <option value="+6">GMT +6</option>
-        <option value="+7">GMT +7</option>
-        <option value="+8">GMT +8</option>
-        <option value="+9">GMT +9</option>
-        <option value="+10">GMT +10</option>
-        <option value="+11">GMT +11</option>
-        <option value="+12">GMT +12</option>
+      <option value="">select your timezone...</option>
     </select>
-    <button type="submit">Register</button>
+    <br>
+    <label>timezone data is fully local, this data does not leave your computer</label><br>
+    <label>do not forget your password! nothing can save your account if you forget your password!</label><br>
+    <label>reminder: do not share any files under /storage/ directory! they make your account secure!</label><br>
+    <br>
+    <button type="submit">register</button>
 </form>
-<form action="/login" method="get">
-    <p>or login to an account...</p>
-    <button type="submit">login to an account</button>
-</form>
+<script>
+    const tzSelect = document.getElementById('timezone');
+    const timeZones = Intl.supportedValuesOf('timeZone');
+    timeZones.forEach(tz => {
+      const option = document.createElement('option');
+      option.value = tz;
+      option.textContent = tz;
+      tzSelect.appendChild(option);
+    });
+    tzSelect.value = Intl.DateTimeFormat().resolvedOptions().timeZone;
+</script>
 {% endblock %}

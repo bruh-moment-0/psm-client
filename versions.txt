@@ -1,5 +1,15 @@
 PSM CLIENT CHANGELIST
 
+CLIENT V2.2.0 (built 11:10 GMT+0 28/11/2025)
+rewrote the user interface
+made changes to the main script
+installer scripts are created, installer coming soon...
+a first boot flag to install liboqs
+
+11/10/2025
+Connection signing was a disaster as it made the server lag and the latency was around 2800 miliseconds
+the servers api will be reverted back to v2.1.0 soon
+
 API V2.1.1 STABLE (built 12:25 GMT+0 9/11/2025)
 better .env handling
 first implementations of ML-DSA for CLIENT-SERVER signing and verifing against MITM attacks

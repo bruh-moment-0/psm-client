@@ -1,13 +1,17 @@
 PyJWT
 Jinja2
+tzdata
 urllib3
 uvicorn
 fastapi
 requests
 pydantic
+wxPython
 MarkupSafe
 argon2-cffi
 pycryptodome
 cryptography
 python-dotenv
+python-dateutil
 python-multipart
+uvicorn[standard]
