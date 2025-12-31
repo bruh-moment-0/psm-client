@@ -1,3 +1,21 @@
+# The main python source code of Private Safe Messaging Client
+# Copyright (C) 2025  bruh-moment-0
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+
 # oh boy oh boy here we go.
 # api was 100x easier than this shit
 # or atleast thats my speculation ofc
@@ -437,7 +455,7 @@ def get_message_ps(message_id: str, userdata: Dict[str, Any], username: str, tok
         if os.path.exists(messagefp):
             # we are trying to read a existing, saved, local file OR
             # sender is trying to get this text, so we gonna use the existing one
-            deriveduserkey = hkdf_function(userkey, userfiledata["messages"][message_id]["hkdfsalt"])
+            deriveduserkey = hkdf_function(userkey, b642byte(userfiledata["messages"][message_id]["hkdfsalt_key"]))
             shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(
                 deriveduserkey,
                 userfiledata["messages"][message_id]["local_ciphertext"],
@@ -482,7 +500,7 @@ def get_message_ps(message_id: str, userdata: Dict[str, Any], username: str, tok
             deriveduserkey = hkdf_function(userkey, hkdfsalt)
             (local_ciphertext, local_tag, local_salt, local_nonce) = encryptAESGCM(deriveduserkey, shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT, human=False)
             userfiledata["messages"][message_id] = {
-                "hkdfsalt": hkdfsalt,
+                "hkdfsalt_key": byte2b64(hkdfsalt),
                 "local_ciphertext": local_ciphertext,
                 "local_tag": local_tag,
                 "local_salt": local_salt,
@@ -512,7 +530,7 @@ def get_message_ps(message_id: str, userdata: Dict[str, Any], username: str, tok
                 "tokenexp": response["tokenexp"],
             }
     else:
-        deriveduserkey = hkdf_function(userkey, userfiledata["messages"][message_id]["hkdfsalt"])
+        deriveduserkey = hkdf_function(userkey, b642byte(userfiledata["messages"][message_id]["hkdfsalt_key"]))
         shared_secret_DO_NOT_SHARE_SUPER_SECRET_ULTRA_IMPORTANT = decryptAESGCM(
             deriveduserkey,
             userfiledata["messages"][message_id]["local_ciphertext"],
