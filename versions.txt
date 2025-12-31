@@ -1,10 +1,16 @@
 PSM CLIENT CHANGELIST
 
+CLIENT V2.2.1 (built 9:00 GMT+0 31/12/2025)
+made a better installer (tkinter based)
+firstboot.flag is removed
+
 CLIENT V2.2.0 (built 11:10 GMT+0 28/11/2025)
-rewrote the user interface
-made changes to the main script
-installer scripts are created, installer coming soon...
-a first boot flag to install liboqs
+rewrote almost all the script
+made a installer
+firstboot.flag for installing the stuff it needs when on the first time it works
+HKDF on messages that are on persistent storage
+timestamp and other metadata inside is inside the encrypted payload
+added a license
 
 11/10/2025
 Connection signing was a disaster as it made the server lag and the latency was around 2800 miliseconds
