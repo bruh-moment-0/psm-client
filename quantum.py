@@ -1,35 +1,22 @@
-# quantum.py for post quantum functions
-# 02/11/2025
+# quantum.py for post quantum functions (02/11/2025)
+# Copyright (C) 2025  bruh-moment-0
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 
 from typing import Optional, Tuple, Any
-from data import BASEDIR
-import os
-
-def file_exists(path):
-    return os.path.isfile(path)
-
-def remove_file(path):
-    os.remove(path)
-
-firstbootflag = os.path.join(BASEDIR, "firstboot.flag")
-requirements = os.path.join(BASEDIR, "requirements.txt")
-if file_exists(firstbootflag):
-    print("Thank you for using Private Safe Messaging.")
-    print("In the first startup, there will be many operations, which will happen now.")
-    print("This will not happen again if you do not remove the _oqs folder.")
-    print("While setting up, do NOT close this window, or your installation might get corrupted!")
-    print("When the setup is over, the program will continue as normal.")
-    print("Press ENTER to acknowledge.")
-    _ = input("")
-    remove_file(firstbootflag)
-    print("installing dependencies.")
-    os.system(f"pip install -r {requirements}")
-    print("installed dependencies.")
-    print("installing liboqs-python...")
-    os.system("git clone --depth=1 https://github.com/open-quantum-safe/liboqs-python")
-    os.system("cd liboqs-python && pip install .")
-    print("ok, liboqs-python is ready! calling oqs...")
-
 import oqs # pyright: ignore[reportMissingImports]
 
 # sign algos:
